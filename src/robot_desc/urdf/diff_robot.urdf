@@ -60,7 +60,7 @@
       <origin xyz="0 0 0.25" rpy="0 0 0"/>
   </joint>
 
-  <link name="wheel_right">
+  <link name="right_wheel">
     <inertial>
       <mass value="0.75"/>
       <inertia ixx="0.001444223" iyy="0.00280875" izz="0.001444223" ixy="0.0" ixz="0.0" iyz="0.0"/>
@@ -78,14 +78,14 @@
     </collision>      
   </link>   
   
-  <joint name="wheel_right_joint" type="continuous">
+  <joint name="right_wheel_joint" type="continuous">
     <origin xyz="0.042 0.16 0.04  " rpy="1.5708 0.0 0.0"/>
     <parent link="base_link"/>
-    <child link="wheel_right"/>
+    <child link="right_wheel"/>
     <axis xyz="0.0 0 1"/>
   </joint>
 
-  <link name="wheel_left">
+  <link name="left_wheel">
     <inertial>
       <mass value="0.75"/>
       <inertia ixx="0.001444223" iyy="0.00280875" izz="0.001444223" ixy="0.0" ixz="0.0" iyz="0.0" />
@@ -103,10 +103,10 @@
     </collision>    
   </link>
   
-  <joint name="wheel_left_joint" type="continuous">
+  <joint name="left_wheel_joint" type="continuous">
     <origin xyz="0.042 -0.16 0.04" rpy="1.5708 0.0 3.14"/>
     <parent link="base_link"/>
-    <child link="wheel_left"/>
+    <child link="left_wheel"/>
     <axis xyz="0.0 0 1"/>
   </joint>
   
@@ -185,13 +185,14 @@
       <material>Gazebo/Blue</material>
   </gazebo>
 
+  <link name="imu_link">
+  </link>
   <joint name="imu_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="imu_link"/>
     <origin xyz="0.0 0 0" rpy="0 0 0"/>
   </joint>
 
-  <link name="imu_link"/>
 
   <link name="lidar_link">
     <visual>
@@ -265,14 +266,13 @@
       <commandTopic>cmd_vel</commandTopic>
       <publish_odom>true</publish_odom>
       <publish_odom_tf>true</publish_odom_tf>
-      <update_rate>15.0</update_rate>
-      <left_joint>wheel_left_joint</left_joint>
-      <right_joint>wheel_right_joint</right_joint>
+      <update_rate>10.0</update_rate>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
       <wheel_separation>0.8</wheel_separation>
       <wheel_diameter>0.3</wheel_diameter>
       <max_wheel_acceleration>0.7</max_wheel_acceleration>
       <robotBaseFrame>base_link</robotBaseFrame>
-
     </plugin>
   </gazebo>
 
@@ -284,51 +284,51 @@
     <material>Gazebo/White</material>
   </gazebo>
   
-  <gazebo reference="wheel_right">
+  <gazebo reference="right_wheel">
     <material>Gazebo/Orange</material>
   </gazebo>
-  <gazebo reference="wheel_left">
+  <gazebo reference="left_wheel">
     <material>Gazebo/Orange</material>
   </gazebo>  
 
   <ros2_control name="robot_hardware" type="system">
       <hardware>
           <plugin>diffdrive_arduino/DiffDriveArduinoHardware</plugin>
-              <param name="wheel_left_name">wheel_left_joint</param>
-              <param name="wheel_right_name">wheel_right_joint</param>
+              <param name="left_wheel_name">left_wheel_joint</param>
+              <param name="right_wheel_name">right_wheel_joint</param>
               <param name="loop_rate">30</param>
-              <param name="device">/dev/ttyAMA0</param>
+              <param name="device">/dev/ttyUSB0</param>
               <param name="baud_rate">9600</param>
       </hardware>
-      <joint name="wheel_left_joint">
+      <joint name="left_wheel_joint">
           <command_interface name="velocity"/>
           <state_interface name="position"/>
           <state_interface name="velocity"/>
       </joint>
-      <joint name="wheel_right_joint">
+      <joint name="right_wheel_joint">
           <command_interface name="velocity"/>
           <state_interface name="position"/>
           <state_interface name="velocity"/>
       </joint>
   </ros2_control>
 
-  <transmission name="wheel_left_trans">
+  <transmission name="left_wheel_trans">
     <type>transmission_interface/SimpleTransmission</type>
-    <joint name="wheel_left_joint">
+    <joint name="left_wheel_joint">
       <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
     </joint>
-    <actuator name="wheel_left_motor">
+    <actuator name="left_wheel_motor">
       <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
   </transmission>
 
-  <transmission name="wheel_right_trans">
+  <transmission name="right_wheel_trans">
     <type>transmission_interface/SimpleTransmission</type>
-    <joint name="wheel_right_joint">
+    <joint name="right_wheel_joint">
       <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
     </joint>
-    <actuator name="wheel_right_motor">
+    <actuator name="right_wheel_motor">
       <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>

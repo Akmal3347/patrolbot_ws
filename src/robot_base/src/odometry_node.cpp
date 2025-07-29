@@ -23,7 +23,8 @@ public:
       ticks_per_rev_(360),
       last_left_ticks_(0),
       last_right_ticks_(0),
-      x_(0.0), y_(0.0), theta_(0.0)
+      x_(0.0), y_(0.0), theta_(0.0),
+      last_time_(this->now())
     {
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
@@ -56,7 +57,7 @@ private:
 
     void update() {
         char buffer[128];
-        int n = read(serial_fd_, buffer, sizeof(buffer));
+        int n = read(serial_fd_, buffer, sizeof(buffer) - 1);
         if (n <= 0) return;
 
         buffer[n] = '\0';
@@ -71,6 +72,11 @@ private:
         last_left_ticks_ = left_ticks;
         last_right_ticks_ = right_ticks;
 
+        // Time difference
+        rclcpp::Time current_time = this->now();
+        double dt = (current_time - last_time_).seconds();
+        last_time_ = current_time;
+
         // Distance in meters
         double dist_left = 2 * M_PI * wheel_radius_ * d_left / ticks_per_rev_;
         double dist_right = 2 * M_PI * wheel_radius_ * d_right / ticks_per_rev_;
@@ -82,27 +88,33 @@ private:
         x_ += dist * std::cos(theta_);
         y_ += dist * std::sin(theta_);
 
+        // Velocities
+        double vx = dist / dt;
+        double vth = delta_theta / dt;
+
         // Create odometry msg
-        auto now = this->get_clock()->now();
         nav_msgs::msg::Odometry odom;
-        odom.header.stamp = now;
+        odom.header.stamp = current_time;
         odom.header.frame_id = "odom";
-        odom.child_frame_id = "base_link";
+        odom.child_frame_id = "base_footprint";
         odom.pose.pose.position.x = x_;
         odom.pose.pose.position.y = y_;
         tf2::Quaternion q;
         q.setRPY(0, 0, theta_);
         odom.pose.pose.orientation = tf2::toMsg(q);
+        odom.twist.twist.linear.x = vx;
+        odom.twist.twist.angular.z = vth;
 
         odom_pub_->publish(odom);
 
         // Broadcast tf
         geometry_msgs::msg::TransformStamped tf;
-        tf.header.stamp = now;
+        tf.header.stamp = current_time;
         tf.header.frame_id = "odom";
         tf.child_frame_id = "base_link";
         tf.transform.translation.x = x_;
         tf.transform.translation.y = y_;
+        tf.transform.translation.z = 0.0;
         tf.transform.rotation = tf2::toMsg(q);
         tf_broadcaster_->sendTransform(tf);
     }
@@ -120,6 +132,7 @@ private:
     // Encoder state
     int last_left_ticks_, last_right_ticks_;
     double x_, y_, theta_;
+    rclcpp::Time last_time_;
 };
 
 int main(int argc, char **argv) {

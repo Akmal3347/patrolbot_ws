@@ -1,74 +1,71 @@
-cmake_minimum_required(VERSION 3.8)
-project(robot_hardware)
+cmake_minimum_required(VERSION 3.16)
+project(robot_hardware LANGUAGES CXX)
 
-# Default to C++17
-if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 17)
+if(CMAKE_CXX_COMPILER_ID MATCHES "(GNU|Clang)")
+  add_compile_options(-Wall -Wextra)
 endif()
 
-# Dependencies
-find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(hardware_interface REQUIRED)
-find_package(pluginlib REQUIRED)
-find_package(controller_interface REQUIRED)
-find_package(rclcpp_lifecycle REQUIRED)
-
-# Include headers
-include_directories(
-  include
-)
-
-# Plugin library
-add_library(robot_hardware_plugin
-  src/arduino_diff_drive_system.cpp
-)
-
-ament_target_dependencies(robot_hardware_plugin
-  rclcpp
+# Dependency list
+set(THIS_PACKAGE_INCLUDE_DEPENDS
   hardware_interface
   pluginlib
+  rclcpp
   rclcpp_lifecycle
 )
 
-# Pluginlib export
-pluginlib_export_plugin_description_file(hardware_interface diffbot_hardware_plugins.xml)
+# Find dependencies
+find_package(ament_cmake REQUIRED)
+foreach(Dependency IN LISTS THIS_PACKAGE_INCLUDE_DEPENDS)
+  find_package(${Dependency} REQUIRED)
+endforeach()
 
-# Install targets
-install(
-  TARGETS robot_hardware_plugin
-  EXPORT export_${PROJECT_NAME}
+# Create shared library
+add_library(robot_hardware SHARED
+  src/diffbot_system.cpp
+)
+
+# C++17 support
+target_compile_features(robot_hardware PUBLIC cxx_std_17)
+
+# Include paths (FIXED)
+target_include_directories(robot_hardware PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+# Dependencies
+ament_target_dependencies(robot_hardware PUBLIC ${THIS_PACKAGE_INCLUDE_DEPENDS})
+
+# Optional: link serial if you're using it
+target_link_libraries(robot_hardware PUBLIC serial)
+
+# DLL visibility macro for Windows builds
+target_compile_definitions(robot_hardware PRIVATE "ROBOT_HARDWARE_BUILDING_DLL")
+
+# Export plugin description (FIXED filename)
+pluginlib_export_plugin_description_file(hardware_interface robot_hardware_plugin.xml)
+
+# Install the shared library
+install(TARGETS robot_hardware
+  EXPORT export_robot_hardware
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 
-# Install headers
+# Install header files (FIXED path)
 install(
   DIRECTORY include/
-  DESTINATION include/
+  DESTINATION include
 )
 
-# Install plugin XML
-install(
-  FILES diffbot_hardware_plugins.xml
-  DESTINATION share/${PROJECT_NAME}
-)
 
-# Package exports
-ament_export_include_directories(
-  include
-)
+# Optional: setup for testing
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+endif()
 
-ament_export_libraries(
-  robot_hardware_plugin
-)
-
-ament_export_dependencies(
-  rclcpp
-  hardware_interface
-  pluginlib
-  rclcpp_lifecycle
-)
-
+# Export
+ament_export_targets(export_robot_hardware HAS_LIBRARY_TARGET)
+ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
 ament_package()

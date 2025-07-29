@@ -1,9 +1,0 @@
-<library path="robot_hardware_plugin">
-  <class name="robot_hardware/ArduinoDiffDriveSystem"
-         type="robot_hardware::ArduinoDiffDriveSystem"
-         base_class_type="hardware_interface::SystemInterface">
-    <description>
-      System interface for a differential drive robot using Arduino.
-    </description>
-  </class>
-</library>
