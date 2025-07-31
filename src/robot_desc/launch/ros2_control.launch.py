@@ -1,6 +1,6 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.substitutions import Command, PathJoinSubstitution
+from launch.substitutions import Command, PathJoinSubstitution, FindExecutable
 from launch_ros.substitutions import FindPackageShare
 import os
 
@@ -15,7 +15,15 @@ def generate_launch_description():
             executable='ros2_control_node',
             name='ros2_control_node',
             parameters=[
-                {"robot_description": Command(['xacro', ' ', xacro_file, ' use_mock:=true'])},
+                {
+                    "robot_description": Command([
+                        FindExecutable(name='xacro'),
+                        ' ',
+                        xacro_file,
+                        ' ', 
+                        'use_mock:=true'
+                    ])
+                },
                 controller_yaml
             ],
             output='screen'

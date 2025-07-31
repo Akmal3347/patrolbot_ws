@@ -10,9 +10,11 @@
  * Encoder ticks are periodically streamed as:
  *   "L:<ticks> R:<ticks>\r\n"
  *
- * NOTE: Pins 18 & 19 => Arduino Mega. If you use an Uno, remap.
+ * NOTE: Pins 18 & 19 => Arduino Mega. If you use an Uno, remap.(Done)
  * NOTE: Only ONE PWM pin ("speedMotor") is provided, so both motors share speed.
  *       For true differential control, give each motor its own PWM pin.
+ * Update: Now using separate PWM pins (leftPWM, rightPWM) for independent motor speed control.
+ * Update:Pins 2 and 3 are used for encoders instead of 18 and 19.
  ********************************************************************/
 
 // ---------------- Pin definitions ----------------
@@ -20,17 +22,18 @@
 #define red_light    6
 #define green_light  5
 
-#define motorA1 2
-#define motorA2 3
+#define motorA1 4    // change from 2 to 4
+#define motorA2 12   //change from 3 to 12
 #define motorB1 8
 #define motorB2 9
 
-// Single PWM for both motors (limitation!)
-#define speedMotor 10
+// PWM pins for motors
+#define leftPWM 10   // PWM pin for left motor
+#define rightPWM 11  // PWM pin for right motor
 
 // Encoders (Arduino Mega pins)
-#define leftEncoderPin  18
-#define rightEncoderPin 19
+#define leftEncoderPin  2   // change from 18 to 2
+#define rightEncoderPin 3   // change from 19 to 3
 
 // ---------------- Config ----------------
 const unsigned long sendInterval = 100;   // ms: periodic encoder publish
@@ -95,8 +98,8 @@ void setup() {
 
   pinMode(motorA1, OUTPUT); pinMode(motorA2, OUTPUT);
   pinMode(motorB1, OUTPUT); pinMode(motorB2, OUTPUT);
-  pinMode(speedMotor, OUTPUT);
-  analogWrite(speedMotor, 0);
+  pinMode(leftPWM, OUTPUT); pinMode(rightPWM, OUTPUT); // change speedmotor to leftPWM and rightPWM
+  analogWrite(leftPWM, 0);  analogWrite(rightPWM, 0);  // add left motor speed and right motor speed
 
   pinMode(leftEncoderPin, INPUT_PULLUP);
   pinMode(rightEncoderPin, INPUT_PULLUP);
@@ -233,38 +236,18 @@ void parseSerialCommand() {
   }
 }
 
-// ---------------- Motor control (legacy path) ----------------
+// ---------------- Motor control(changed)###### ----------------
 void updateMotors_FromNormalizedSpeeds() {
-  // Because you only have ONE PWM pin for both motors,
-  // we drive BOTH with the SAME magnitude (worst of the two).
-  // You still get direction per motor, but no independent magnitude control.
-  // For true differential drive, give each motor its own PWM pin
-  // (e.g., speedMotorLeft, speedMotorRight).
-  float magL = fabs(leftSpeedCmd);
-  float magR = fabs(rightSpeedCmd);
-  float mag = max(magL, magR);
-  int pwm = (int)(mag * pwmMax);
-  if (pwm > 255) pwm = 255;
+  int pwmLeft = abs(leftSpeedCmd * pwmMax);
+  int pwmRight = abs(rightSpeedCmd * pwmMax);
 
-  // Left direction
-  if (leftSpeedCmd >= 0) {
-    digitalWrite(motorA1, HIGH);
-    digitalWrite(motorA2, LOW);
-  } else {
-    digitalWrite(motorA1, LOW);
-    digitalWrite(motorA2, HIGH);
-  }
+  digitalWrite(motorA1, leftSpeedCmd >= 0);
+  digitalWrite(motorA2, leftSpeedCmd < 0);
+  analogWrite(leftPWM, pwmLeft);
 
-  // Right direction
-  if (rightSpeedCmd >= 0) {
-    digitalWrite(motorB1, HIGH);
-    digitalWrite(motorB2, LOW);
-  } else {
-    digitalWrite(motorB1, LOW);
-    digitalWrite(motorB2, HIGH);
-  }
-
-  analogWrite(speedMotor, pwm);
+  digitalWrite(motorB1, rightSpeedCmd >= 0);
+  digitalWrite(motorB2, rightSpeedCmd < 0);
+  analogWrite(rightPWM, pwmRight);
 }
 
 // ---------------- PID loop for ros2_control ----------------
@@ -281,30 +264,25 @@ void applyPIDLoop() {
   int pwm_left = pidStep(pid_left, target_counts_left, delta_left);
   int pwm_right = pidStep(pid_right, target_counts_right, delta_right);
 
-  // With shared PWM, we can't apply pwm_left/pwm_right separately.
-  // We'll approximate by using the max magnitude and set directions independently.
-  int pwm_mag = max(abs(pwm_left), abs(pwm_right));
-  if (pwm_mag > 255) pwm_mag = 255;
+  // Left motor direction and speed###
+if (pwm_left >= 0) {
+  digitalWrite(motorA1, HIGH);
+  digitalWrite(motorA2, LOW);
+} else {
+  digitalWrite(motorA1, LOW);
+  digitalWrite(motorA2, HIGH);
+}
+analogWrite(leftPWM, abs(pwm_left));
 
-  // Left direction from PID
-  if (pwm_left >= 0) {
-    digitalWrite(motorA1, HIGH);
-    digitalWrite(motorA2, LOW);
-  } else {
-    digitalWrite(motorA1, LOW);
-    digitalWrite(motorA2, HIGH);
-  }
-
-  // Right direction from PID
-  if (pwm_right >= 0) {
-    digitalWrite(motorB1, HIGH);
-    digitalWrite(motorB2, LOW);
-  } else {
-    digitalWrite(motorB1, LOW);
-    digitalWrite(motorB2, HIGH);
-  }
-
-  analogWrite(speedMotor, pwm_mag);
+// Right motor direction and speed###
+if (pwm_right >= 0) {
+  digitalWrite(motorB1, HIGH);
+  digitalWrite(motorB2, LOW);
+} else {
+  digitalWrite(motorB1, LOW);
+  digitalWrite(motorB2, HIGH);
+}
+analogWrite(rightPWM, abs(pwm_right));
 }
 
 int pidStep(PID &pid, long target_counts, long measured_counts) {

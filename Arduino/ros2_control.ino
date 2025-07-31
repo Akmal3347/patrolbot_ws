@@ -1,15 +1,16 @@
-// Pin definitions
+// Pin definitions// code for motors based on serial input only
 #define alarm 7
 #define red_light 6
 #define green_light 5
-#define motorA1 2
-#define motorA2 3
+#define motorA1 4 // change from 2 to 4
+#define motorA2 12 // change from 3 to 12
 #define motorB1 8
 #define motorB2 9
-#define speedMotor 10
+#define leftPWM 10 // PWM pin for left motor
+#define rightPWM 11 // PWM pin for right motor
 
-#define leftEncoderPin 18
-#define rightEncoderPin 19
+#define leftEncoderPin 2 // change from 18 to 2
+#define rightEncoderPin 3 // change from 19 to 3
 
 // Encoder tick counts
 volatile long leftTicks = 0;
@@ -42,8 +43,8 @@ void setup() {
 
   pinMode(motorA1, OUTPUT); pinMode(motorA2, OUTPUT);
   pinMode(motorB1, OUTPUT); pinMode(motorB2, OUTPUT);
-  pinMode(speedMotor, OUTPUT);
-  analogWrite(speedMotor, 200); // Base PWM speed, can be adjusted
+  pinMode(leftPWM, OUTPUT); pinMode(rightPWM, OUTPUT);
+  analogWrite(leftPWM, 200); analogWrite(rightPWM, 200) // change from 255 to 200 for initial speed
 
   pinMode(leftEncoderPin, INPUT_PULLUP);
   pinMode(rightEncoderPin, INPUT_PULLUP);
@@ -114,7 +115,7 @@ void updateMotors() {
     digitalWrite(motorA1, LOW);
     digitalWrite(motorA2, HIGH);
   }
-  analogWrite(speedMotor, (int)(abs(leftSpeedCmd) * pwmMax));
+  analogWrite(leftPWM, (int)(abs(leftSpeedCmd) * pwmMax));  // Ensure PWM is within range
 
   // Right motor
   if (rightSpeedCmd >= 0) {
@@ -124,8 +125,7 @@ void updateMotors() {
     digitalWrite(motorB1, LOW);
     digitalWrite(motorB2, HIGH);
   }
-  // You can consider separate PWM if your hardware supports it
-  // For simplicity, using same PWM for both
+  analogWrite(rightPWM, (int)(abs(rightSpeedCmd) * pwmMax));  // Ensure PWM is within range
 }
 
 // Interrupt routines for encoder

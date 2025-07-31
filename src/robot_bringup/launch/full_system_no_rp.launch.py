@@ -2,29 +2,30 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
+from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
+from launch_ros.substitutions import FindPackageShare
 import os
 
 
 def generate_launch_description():
-    # Paths
-    rplidar_launch = os.path.join(
-        get_package_share_directory('rplidar_ros'),
-        'launch',
-        'rplidar_a1_launch.py'
-    )
-
-    robot_desc_path = os.path.join(
-        get_package_share_directory('robot_desc'),
-        'urdf',
-        'diff_robot.urdf'
-    )
-
-    rviz_config_file = os.path.join(
-        get_package_share_directory('robot_bringup'),
-        'robot_bringup',
+    # using xacro to read the URDF file
+    robot_description = {
+        'robot_description': Command([
+            FindExecutable(name='xacro'),
+            ' ',
+            PathJoinSubstitution([
+                FindPackageShare('robot_desc'),
+                'urdf',
+                'diff_robot.urdf.xacro'
+            ])
+        ])
+    }
+    # RViz configuration file
+    rviz_config_file = PathJoinSubstitution([
+        FindPackageShare('robot_bringup'),
+        'rviz',
         'robot.rviz'
-    )
+    ])
 
     return LaunchDescription([
         # # Launch RPLIDAR (commented out)
@@ -54,7 +55,8 @@ def generate_launch_description():
             executable='robot_state_publisher',
             name='robot_state_publisher',
             output='screen',
-            parameters=[{'robot_description': open(robot_desc_path).read()}]
+            parameters=[robot_description]
+
         ),
 
         # RViz

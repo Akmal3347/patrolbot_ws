@@ -2,11 +2,12 @@
 #define alarm 7
 #define red_light 6
 #define green_light 5
-#define motorA1 2
-#define motorA2 3
+#define motorA1 4//change from 2 to 4
+#define motorA2 12//change from 3 to 12
 #define motorB1 8
 #define motorB2 9
-#define speedMotor 10
+#define leftPWM 10
+#define rightPWM 11
 
 // Ultrasonic Pins
 const int trigPinM = A1;
@@ -17,8 +18,8 @@ const int trigPinL = A4;
 const int echoPinL = A5;
 
 // Encoder Pins
-#define leftEncoderPin 18 // not set yet
-#define rightEncoderPin 19 //not set yet
+#define leftEncoderPin 2 // set already
+#define rightEncoderPin 3 //set already
 volatile long leftTicks = 0;
 volatile long rightTicks = 0;
 
@@ -27,6 +28,9 @@ int threshold_dist = 50;
 int distM, distR, distL;
 String inputString = "";
 bool stringComplete = false;
+
+int leftSpeed = 125;  // add leftSpeed
+int rightSpeed = 125; // add rightSpeed
 
 void setup() {
   Serial.begin(9600);
@@ -42,8 +46,10 @@ void setup() {
 
   pinMode(motorA1, OUTPUT); pinMode(motorA2, OUTPUT);
   pinMode(motorB1, OUTPUT); pinMode(motorB2, OUTPUT);
-  pinMode(speedMotor, OUTPUT);
-  analogWrite(speedMotor, 125);
+  pinMode(leftPWM, OUTPUT); pinMode(rightPWM, OUTPUT);// change speedmotor to leftPWM and rightPWM
+  
+  analogWrite(leftPWM, leftSpeed); // add left motor speed
+  analogWrite(rightPWM, rightSpeed); // add right motor speed
 
   pinMode(leftEncoderPin, INPUT_PULLUP);
   pinMode(rightEncoderPin, INPUT_PULLUP);
@@ -153,15 +159,16 @@ int ultrasonic(int trigPin, int echoPin) {
   return distance;
 }
 
-// Motor control functions
-void Rmotor_forward()  { digitalWrite(motorB1, HIGH); digitalWrite(motorB2, LOW); }
-void Rmotor_reverse()  { digitalWrite(motorB1, LOW);  digitalWrite(motorB2, HIGH); }
-void Rmotor_stop()     { digitalWrite(motorB1, LOW);  digitalWrite(motorB2, LOW); }
+// Motor control functions with PWM
+void Rmotor_forward()  { digitalWrite(motorB1, HIGH); digitalWrite(motorB2, LOW); analogWrite(rightPWM, rightSpeed); }//add rightPWM
+void Rmotor_reverse()  { digitalWrite(motorB1, LOW);  digitalWrite(motorB2, HIGH); analogWrite(rightPWM, rightSpeed); }//add rightPWM
+void Rmotor_stop()     { digitalWrite(motorB1, LOW);  digitalWrite(motorB2, LOW); analogWrite(rightPWM, 0); }//add rightPWM
 
-void Lmotor_forward()  { digitalWrite(motorA1, HIGH); digitalWrite(motorA2, LOW); }
-void Lmotor_reverse()  { digitalWrite(motorA1, LOW);  digitalWrite(motorA2, HIGH); }
-void Lmotor_stop()     { digitalWrite(motorA1, LOW);  digitalWrite(motorA2, LOW); }
+void Lmotor_forward()  { digitalWrite(motorA1, HIGH); digitalWrite(motorA2, LOW);  analogWrite(leftPWM, leftSpeed);}//add leftPWM
+void Lmotor_reverse()  { digitalWrite(motorA1, LOW);  digitalWrite(motorA2, HIGH); analogWrite(leftPWM, leftSpeed);}//add leftPWM
+void Lmotor_stop()     { digitalWrite(motorA1, LOW);  digitalWrite(motorA2, LOW); analogWrite(leftPWM, 0); }//add leftPWM
 
+//Light and Alarm control functions
 void Glight_on()       { digitalWrite(green_light, HIGH); }
 void Glight_off()      { digitalWrite(green_light, LOW); }
 void Rlight_on()       { digitalWrite(red_light, HIGH); }
@@ -169,5 +176,6 @@ void Rlight_off()      { digitalWrite(red_light, LOW); }
 void alarm_on()        { digitalWrite(alarm, HIGH); }
 void alarm_off()       { digitalWrite(alarm, LOW); }
 
+// Encoder counters
 void countLeft() { leftTicks++; }
 void countRight() { rightTicks++; }

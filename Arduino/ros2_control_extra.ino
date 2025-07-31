@@ -1,14 +1,15 @@
-// -----------------------------
+// ----------------------------- Ros 2 +obstacle override[motor will not respond to Ros2 command-only direction change] -----------------------------
 // Pin Definitions
 // -----------------------------
 #define alarm 7
 #define red_light 6
 #define green_light 5
-#define motorA1 2
-#define motorA2 3
+#define motorA1 4
+#define motorA2 12   // changed from 3 to 12
 #define motorB1 8
 #define motorB2 9
-#define speedMotor 10
+#define leftPWM 10   // PWM for left motor
+#define rightPWM 11  // PWM for right motor
 
 // Ultrasonic sensors
 #define trigPinM A1
@@ -19,8 +20,8 @@
 #define echoPinR A5
 
 // Encoders
-#define leftEncoderPin 18
-#define rightEncoderPin 19
+#define leftEncoderPin 2  // changed from 18 to 2
+#define rightEncoderPin 3  // changed from 19 to 3
 
 // -----------------------------
 // State Variables
@@ -39,7 +40,6 @@ bool stringComplete = false;
 bool obstacleDetected = false;
 unsigned long lastObstacleTime = 0;
 const int obstacleHoldTime = 1000;  // ms
-
 // -----------------------------
 // Setup
 // -----------------------------
@@ -54,8 +54,8 @@ void setup() {
 
   pinMode(motorA1, OUTPUT); pinMode(motorA2, OUTPUT);
   pinMode(motorB1, OUTPUT); pinMode(motorB2, OUTPUT);
-  pinMode(speedMotor, OUTPUT);
-  analogWrite(speedMotor, 200);  // fixed PWM speed
+  pinMode(leftPWM, OUTPUT); pinMode(rightPWM, OUTPUT);
+  analogWrite(leftPWM, 200); analogWrite(rightPWM, 200); // fixed PWM speed
 
   // Ultrasonic
   pinMode(trigPinM, OUTPUT); pinMode(echoPinM, INPUT);
@@ -139,11 +139,11 @@ void applyMotorSpeeds() {
 }
 
 void setMotor(float speed, char side) {
-  int in1, in2;
+  int in1, in2, pwmPin;
   if (side == 'L') {
-    in1 = motorA1; in2 = motorA2;
+    in1 = motorA1; in2 = motorA2; pwmPin = leftPWM; // add PWM pin for left motor
   } else {
-    in1 = motorB1; in2 = motorB2;
+    in1 = motorB1; in2 = motorB2; pwmPin = rightPWM; // add PWM pin for right motor
   }
 
   if (speed > 0.01) {

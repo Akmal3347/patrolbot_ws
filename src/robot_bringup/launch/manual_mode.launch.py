@@ -2,22 +2,34 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
+from launch.substitutions import Command, PathJoinSubstitution, FindExecutable
+from launch_ros.substitutions import FindPackageShare 
 
 def generate_launch_description():
-    # Paths
-    robot_base_dir = get_package_share_directory('robot_base')
-    robot_desc_dir = get_package_share_directory('robot_desc')
-    rplidar_launch = os.path.join(
-        get_package_share_directory('rplidar_ros'),
-        'launch', 'rplidar.launch.py'
-    )
+    # Generate robot description using xacro
+    robot_description = Command([
+        FindExecutable(name='xacro'),
+        ' ',
+        PathJoinSubstitution([
+            FindPackageShare('robot_desc'),
+            'urdf',
+            'robot.urdf.xacro'
+        ])
+    ])
 
-    # Load URDF file
-    urdf_path = os.path.join(robot_desc_dir, 'urdf', 'diff_robot.urdf')
-    with open(urdf_path, 'r') as inf:
-        robot_description = inf.read()
+    # RPLIDAR launch file path
+    rplidar_launch = PathJoinSubstitution([
+        FindPackageShare('rplidar_ros'),
+        'launch',
+        'rplidar.launch.py'
+    ])
+
+    # RViz config path
+    rviz_config_file = PathJoinSubstitution([
+        FindPackageShare('robot_bringup'),
+        'rviz',
+        'robot.rviz'
+    ])
 
     return LaunchDescription([
         # Motor driver node
@@ -41,7 +53,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(rplidar_launch)
         ),
 
-        # Robot state publisher (for URDF)
+        # Robot state publisher (for URDF from xacro)
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
@@ -56,6 +68,6 @@ def generate_launch_description():
             executable='rviz2',
             name='rviz2',
             output='screen',
-            arguments=['-d', os.path.join(robot_bringup_dir := get_package_share_directory('robot_bringup'), 'robot.rviz')]
+            arguments=['-d', rviz_config_file]
         ),
     ])

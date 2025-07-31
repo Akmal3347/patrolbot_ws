@@ -1,17 +1,30 @@
-
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from ament_index_python.packages import get_package_share_directory  
+import os
 
 def generate_launch_description():
     namespace_arg = DeclareLaunchArgument(
         'namespace', default_value='', description='Robot namespace'
     )
+
+    rviz_arg = DeclareLaunchArgument(
+        'rviz_config', 
+        default_value=os.path.join(
+            get_package_share_directory('robot_bringup'), 
+            'rviz', 
+            'robot.rviz'
+        ),
+        description='Rviz config file'
+    )
+    
     ns = LaunchConfiguration('namespace')
 
     return LaunchDescription([
         namespace_arg,
+        rviz_arg,
 
         Node(
             package='robot_base',

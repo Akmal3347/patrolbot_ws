@@ -21,18 +21,20 @@ from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-
-
 def generate_launch_description():
     # Get URDF via 
 
-    robot_description_path = os.path.join(
-        get_package_share_directory('robot_desc'),
-        'urdf',
-        'diff_robot.urdf'
-    )
-
-    robot_description = {"robot_description": robot_description_path}
+    robot_description = {
+        'robot_description': Command([
+            FindExecutable(name='xacro'),
+            ' ',
+            PathJoinSubstitution([
+                FindPackageShare('robot_desc'),
+                'urdf',
+                'diff_robot.urdf.xacro'
+            ])
+        ])
+    }
 
     robot_controllers = PathJoinSubstitution(
         [
@@ -42,7 +44,7 @@ def generate_launch_description():
         ]
     )
     rviz_config_file = PathJoinSubstitution(
-        [FindPackageShare("diffdrive_arduino"), "rviz", "diffbot.rviz"]
+        [FindPackageShare("robot_bringup"), "rviz", "diffbot.rviz"]
     )
 
     control_node = Node(

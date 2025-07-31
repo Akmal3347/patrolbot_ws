@@ -1,0 +1,11 @@
+
+  -motorA1 pin4
+  -motorA2 pin12
+  -LeftEncoder pin2
+  -RightEncoder pin3
+  -add different pwm pins for motors
+  -motor controls section art ros2_new-trial change
+
+
+  full_system_no_rp.launch.py
+    -need to change the 
