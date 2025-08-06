@@ -9,3 +9,10 @@
 
   full_system_no_rp.launch.py
     -need to change the 
+
+    urdf diff_bot
+
+    -chnage the caster,left and right wheel from continuous to fixed
+
+    setup.py
+    -(os.path.join('share', package_name, 'config'), glob('config/*.yaml')),//add this

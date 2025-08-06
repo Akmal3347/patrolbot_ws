@@ -1,4 +1,4 @@
-<library path="robot_hardware">
+<library path="librobot_hardware">
   <class name="robot_hardware/DiffDriveArduinoHardware"
          type="robot_hardware::DiffDriveArduinoHardware"
          base_class_type="hardware_interface::SystemInterface">

@@ -78,7 +78,7 @@
     </collision>      
   </link>   
   
-  <joint name="right_wheel_joint" type="continuous">
+  <joint name="right_wheel_joint" type="fixed">
     <origin xyz="0.042 0.16 0.04  " rpy="1.5708 0.0 0.0"/>
     <parent link="base_link"/>
     <child link="right_wheel"/>
@@ -103,7 +103,7 @@
     </collision>    
   </link>
   
-  <joint name="left_wheel_joint" type="continuous">
+  <joint name="left_wheel_joint" type="fixed">
     <origin xyz="0.042 -0.16 0.04" rpy="1.5708 0.0 3.14"/>
     <parent link="base_link"/>
     <child link="left_wheel"/>
@@ -135,7 +135,7 @@
     </collision>
   </link>
   
-  <joint name="caster_joint" type="continuous">
+  <joint name="caster_joint" type="fixed">
     <origin xyz="-0.0635 0 -0.01" rpy="0.0 0.0 0.0"/>
     <axis xyz="0 0 1" />
     <parent link="base_link"/>
@@ -293,12 +293,16 @@
 
   <ros2_control name="robot_hardware" type="system">
       <hardware>
-          <plugin>diffdrive_arduino/DiffDriveArduinoHardware</plugin>
+          <plugin>robot_hardware/DiffDriveArduinoHardware</plugin>
               <param name="left_wheel_name">left_wheel_joint</param>
               <param name="right_wheel_name">right_wheel_joint</param>
-              <param name="loop_rate">30</param>
+              <param name="loop_rate">"30"</param>
               <param name="device">/dev/ttyUSB0</param>
-              <param name="baud_rate">9600</param>
+              <param name="baud_rate">"9600"</param>
+              <param name="enc_counts_per_rev">"360"</param>
+              <param name="wheel_radius">"0.05"</param>
+              <param name="wheel_separation">"0.2"</param>
+              <param name="timeout">"0.5"</param>
       </hardware>
       <joint name="left_wheel_joint">
           <command_interface name="velocity"/>
