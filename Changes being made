@@ -16,3 +16,6 @@
 
     setup.py
     -(os.path.join('share', package_name, 'config'), glob('config/*.yaml')),//add this
+
+   robot_hardware_plugin.xml
+   -change librobot to robot
