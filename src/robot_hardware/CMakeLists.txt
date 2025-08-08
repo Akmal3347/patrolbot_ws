@@ -65,6 +65,11 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 endif()
 
+install(FILES
+  robot_hardware_plugin.xml
+  DESTINATION share/${PROJECT_NAME}
+)
+
 # Export
 ament_export_targets(export_robot_hardware HAS_LIBRARY_TARGET)
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})

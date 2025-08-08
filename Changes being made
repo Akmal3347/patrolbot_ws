@@ -19,3 +19,20 @@
 
    robot_hardware_plugin.xml
    -change librobot to robot
+
+   diffbot_controlers.yaml
+    -change hertz to 100
+      add  hardware:
+           plugin: "robot_hardware/DiffDriveArduinoHardware"
+           serial_port: "/dev/ttyUSB0"
+           baud_rate: 115200
+           loop_hz: 100
+
+  ros2_control.launch.py
+    -  with open(controller_config_path, 'r') as f:
+        controller_params = yaml.safe_load(f)
+    - with open(urdf_file, 'r') as infp:
+        robot_description = {'robot_description': infp.read()}
+
+  CMakeLists.txt
+    -add install(FILES robot_hardware_plugin.xml DESTINATION share/${PROJECT_NAME})

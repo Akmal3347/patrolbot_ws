@@ -1,5 +1,7 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -15,12 +17,12 @@ def generate_launch_description():
 
     # Load controller config YAML
     import yaml
-    controller_yaml = os.path.join(
+    controller_config_path = os.path.join(
         get_package_share_directory('robot_bringup'),
         'config',
         'diffbot_controllers.yaml'
     )
-    with open(controller_yaml, 'r') as f:
+    with open(controller_config_path, 'r') as f:
         controller_params = yaml.safe_load(f)
 
     return LaunchDescription([
@@ -30,7 +32,7 @@ def generate_launch_description():
             executable='robot_state_publisher',
             name='robot_state_publisher',
             output='screen',
-            parameters=[robot_description]
+            parameters=[robot_description, controller_config_path]
         ),
 
         # Start ros2_control_node
@@ -38,7 +40,7 @@ def generate_launch_description():
             package='controller_manager',
             executable='ros2_control_node',
             name='ros2_control_node',
-            parameters=[robot_description, controller_params],
+            parameters=[controller_params],
             output='screen'
         ),
 
