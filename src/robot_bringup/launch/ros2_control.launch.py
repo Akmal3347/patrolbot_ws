@@ -23,7 +23,11 @@ def generate_launch_description():
         'diffbot_controllers.yaml'
     )
     with open(controller_config_path, 'r') as f:
-        controller_params = yaml.safe_load(f)
+        controller_config = yaml.safe_load(f)
+
+    print("\n=== Loaded controller config +++")
+    print(yaml.dump(controller_config, default_flow_style=False))
+    print("===================\n")
 
     return LaunchDescription([
         # Load robot description from URDF
@@ -32,7 +36,7 @@ def generate_launch_description():
             executable='robot_state_publisher',
             name='robot_state_publisher',
             output='screen',
-            parameters=[robot_description, controller_config_path]
+            parameters=[robot_description],
         ),
 
         # Start ros2_control_node
@@ -40,7 +44,7 @@ def generate_launch_description():
             package='controller_manager',
             executable='ros2_control_node',
             name='ros2_control_node',
-            parameters=[controller_params],
+            parameters=[robot_description, controller_config],
             output='screen'
         ),
 
