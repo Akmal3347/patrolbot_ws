@@ -11,7 +11,7 @@ controller_manager:
     hardware:
       plugin: "robot_hardware/DiffDriveArduinoHardware"
       serial_port: "/dev/ttyUSB0"
-      baud_rate: 115200
+      baud_rate: 9600
       loop_hz: 100
 
 diffbot_base_controller:
