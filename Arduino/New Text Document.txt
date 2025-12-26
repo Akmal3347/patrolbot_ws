@@ -1,0 +1,1524 @@
+// Pin definitions (Uno)
+#define alarm 7
+#define red_light 6
+#define green_light 5
+
+#define motorA1 4     // Left motor direction pin 1
+#define motorA2 12    // Left motor direction pin 2
+#define motorB1 8     // Right motor direction pin 1
+#define motorB2 9     // Right motor direction pin 2
+#define leftPWM 10    // Left motor PWM (speed)
+#define rightPWM 11   // Right motor PWM (speed)
+
+#define leftEncoderPin 2   // Left encoder
+#define rightEncoderPin 3  // Right encoder
+
+// Encoder tick counts
+volatile long leftTicks = 0;
+volatile long rightTicks = 0;
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100; // Send encoder data every 100ms
+
+// Motor speed variables
+float leftSpeedCmd = 0.0;   // Range: -1.0 to 1.0
+float rightSpeedCmd = 0.0;  // Range: -1.0 to 1.0
+
+// PWM max
+const int pwmMax = 255;
+
+// Turn factor for differential steering (0–1)
+const float turnFactor = 0.5;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(alarm, OUTPUT);
+  pinMode(red_light, OUTPUT);
+  pinMode(green_light, OUTPUT);
+
+  pinMode(motorA1, OUTPUT);
+  pinMode(motorA2, OUTPUT);
+  pinMode(motorB1, OUTPUT);
+  pinMode(motorB2, OUTPUT);
+
+  pinMode(leftPWM, OUTPUT);
+  pinMode(rightPWM, OUTPUT);
+
+  // Encoder pins
+  pinMode(leftEncoderPin, INPUT_PULLUP);
+  pinMode(rightEncoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(leftEncoderPin), countLeft, RISING);
+  attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
+
+  Serial.println("Motor test ready");
+}
+
+void loop() {
+  parseSerialCommand();
+  updateMotors();
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= sendInterval) {
+    sendEncoderCounts();
+    lastSendTime = now;
+  }
+}
+
+// Parse serial commands like "R1.0,L0.5"
+void parseSerialCommand() {
+  while (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+
+    int rIndex = line.indexOf('R');
+    int lIndex = line.indexOf('L');
+    if (rIndex != -1 && lIndex != -1) {
+      float rSpeed = 0.0, lSpeed = 0.0;
+
+      int commaIndex = line.indexOf(',', rIndex);
+      if (commaIndex != -1) {
+        rSpeed = line.substring(rIndex + 1, commaIndex).toFloat();
+      }
+
+      lSpeed = line.substring(lIndex + 1).toFloat();
+
+      // Clamp -1.0 to 1.0
+      rightSpeedCmd = constrain(rSpeed, -1.0, 1.0);
+      leftSpeedCmd = constrain(lSpeed, -1.0, 1.0);
+    }
+  }
+}
+
+// Update motor directions and PWM with differential steering
+void updateMotors() {
+  float leftPWMVal = abs(leftSpeedCmd);
+  float rightPWMVal = abs(rightSpeedCmd);
+
+  // Differential steering: if one wheel is zero, scale it for smoother turns
+  if (leftPWMVal == 0 && rightPWMVal > 0) leftPWMVal = rightPWMVal * turnFactor;
+  if (rightPWMVal == 0 && leftPWMVal > 0) rightPWMVal = leftPWMVal * turnFactor;
+
+  // Left motor direction
+  if (leftSpeedCmd >= 0) {
+    digitalWrite(motorA1, HIGH);
+    digitalWrite(motorA2, LOW);
+  } else {
+    digitalWrite(motorA1, LOW);
+    digitalWrite(motorA2, HIGH);
+  }
+  analogWrite(leftPWM, (int)(leftPWMVal * pwmMax));
+
+  // Right motor direction
+  if (rightSpeedCmd >= 0) {
+    digitalWrite(motorB1, HIGH);
+    digitalWrite(motorB2, LOW);
+  } else {
+    digitalWrite(motorB1, LOW);
+    digitalWrite(motorB2, HIGH);
+  }
+  analogWrite(rightPWM, (int)(rightPWMVal * pwmMax));
+}
+
+// Encoder interrupts
+void countLeft() { leftTicks++; }
+void countRight() { rightTicks++; }
+
+// Send ticks + overall motion
+void sendEncoderCounts() {
+  Serial.print("L:");
+  Serial.print(leftTicks);
+  Serial.print(" R:");
+  Serial.print(rightTicks);
+  Serial.print(" | Motion: ");
+
+  // Determine overall robot motion
+  if (leftSpeedCmd > 0 && rightSpeedCmd > 0) Serial.println("Forward");
+  else if (leftSpeedCmd < 0 && rightSpeedCmd < 0) Serial.println("Backward");
+  else if (leftSpeedCmd <= 0 && rightSpeedCmd > 0) Serial.println("Turn Right");
+  else if (leftSpeedCmd > 0 && rightSpeedCmd <= 0) Serial.println("Turn Left");
+  else Serial.println("Stop");
+}
+
+For motor to run via 1 and 0
+
+
+// Pin definitions (Uno)
+#define motorA1 4
+#define motorA2 12
+#define motorB1 8
+#define motorB2 9
+#define leftPWM 10
+#define rightPWM 11
+
+#define leftEncoderPin 2
+#define rightEncoderPin 3
+
+volatile long leftTicks = 0;
+volatile long rightTicks = 0;
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100; // ms
+
+float leftSpeedCmd = 0;
+float rightSpeedCmd = 0;
+const int pwmMax = 255;
+
+// Keyboard state
+bool wPressed = false;
+bool aPressed = false;
+bool sPressed = false;
+bool dPressed = false;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(motorA1, OUTPUT);
+  pinMode(motorA2, OUTPUT);
+  pinMode(motorB1, OUTPUT);
+  pinMode(motorB2, OUTPUT);
+  pinMode(leftPWM, OUTPUT);
+  pinMode(rightPWM, OUTPUT);
+
+  pinMode(leftEncoderPin, INPUT_PULLUP);
+  pinMode(rightEncoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(leftEncoderPin), countLeft, RISING);
+  attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
+
+  Serial.println("WASD control ready");
+}
+
+void loop() {
+  readKeyboardState();
+  computeMotorSpeeds();
+  updateMotors();
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= sendInterval) {
+    sendEncoderCounts();
+    lastSendTime = now;
+  }
+}
+
+// Read keyboard state from serial
+void readKeyboardState() {
+  while (Serial.available()) {
+    char cmd = Serial.read();
+    switch(cmd) {
+      case 'W': case 'w': wPressed = true; break;
+      case 'S': case 's': sPressed = true; break;
+      case 'A': case 'a': aPressed = true; break;
+      case 'D': case 'd': dPressed = true; break;
+      case 'x': case 'X':  // stop all keys
+        wPressed = false; sPressed = false; aPressed = false; dPressed = false;
+        break;
+      default: break;
+    }
+  }
+}
+
+// Compute motor speeds with proper turning
+void computeMotorSpeeds() {
+  float forward = 0;
+  if (wPressed) forward += 1.0;
+  if (sPressed) forward -= 1.0;
+
+  float turn = 0;
+  if (aPressed) turn -= 1.0;  // left
+  if (dPressed) turn += 1.0;  // right
+
+  // Differential steering
+  leftSpeedCmd  = constrain(forward + turn, -1.0, 1.0);
+  rightSpeedCmd = constrain(forward - turn, -1.0, 1.0);
+}
+
+// Update motor outputs
+void updateMotors() {
+  // Left motor
+  if (leftSpeedCmd >= 0) { digitalWrite(motorA1, HIGH); digitalWrite(motorA2, LOW); }
+  else { digitalWrite(motorA1, LOW); digitalWrite(motorA2, HIGH); }
+  analogWrite(leftPWM, (int)(abs(leftSpeedCmd) * pwmMax));
+
+  // Right motor
+  if (rightSpeedCmd >= 0) { digitalWrite(motorB1, HIGH); digitalWrite(motorB2, LOW); }
+  else { digitalWrite(motorB1, LOW); digitalWrite(motorB2, HIGH); }
+  analogWrite(rightPWM, (int)(abs(rightSpeedCmd) * pwmMax));
+}
+
+// Encoder interrupts
+void countLeft() { leftTicks++; }
+void countRight() { rightTicks++; }
+
+// Send ticks + motion
+void sendEncoderCounts() {
+  Serial.print("L:");
+  Serial.print(leftTicks);
+  Serial.print(" R:");
+  Serial.print(rightTicks);
+  Serial.print(" | Motion: ");
+
+  if (leftSpeedCmd > 0 && rightSpeedCmd > 0) Serial.println("Forward");
+  else if (leftSpeedCmd < 0 && rightSpeedCmd < 0) Serial.println("Backward");
+  else if (leftSpeedCmd > rightSpeedCmd) Serial.println("Turn Left");
+  else if (leftSpeedCmd < rightSpeedCmd) Serial.println("Turn Right");
+  else Serial.println("Stop");
+}
+
+Via wasd
+
+
+
+// ========================
+// Pin definitions (Uno)
+// ========================
+#define alarm 7
+#define red_light 6
+#define green_light 5
+
+#define motorA1 4     // Left motor direction pin 1
+#define motorA2 12    // Left motor direction pin 2
+#define motorB1 8     // Right motor direction pin 1
+#define motorB2 9     // Right motor direction pin 2
+#define leftPWM 10    // Left motor PWM (speed)
+#define rightPWM 11   // Right motor PWM (speed)
+
+#define leftEncoderPin 2   // Left encoder
+#define rightEncoderPin 3  // Right encoder
+
+// ========================
+// Encoder tick counts
+// ========================
+volatile long leftTicks = 0;
+volatile long rightTicks = 0;
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100; // Send encoder data every 100ms
+
+// ========================
+// Motor speed variables
+// ========================
+float leftSpeedCmd = 0.0;   // Range: -1.0 to 1.0
+float rightSpeedCmd = 0.0;  // Range: -1.0 to 1.0
+
+// PWM max
+const int pwmMax = 255;
+
+// ========================
+// Setup
+// ========================
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(alarm, OUTPUT);
+  pinMode(red_light, OUTPUT);
+  pinMode(green_light, OUTPUT);
+
+  pinMode(motorA1, OUTPUT);
+  pinMode(motorA2, OUTPUT);
+  pinMode(motorB1, OUTPUT);
+  pinMode(motorB2, OUTPUT);
+
+  pinMode(leftPWM, OUTPUT);
+  pinMode(rightPWM, OUTPUT);
+
+  // Encoder pins
+  pinMode(leftEncoderPin, INPUT_PULLUP);
+  pinMode(rightEncoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(leftEncoderPin), countLeft, RISING);
+  attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
+
+  Serial.println("READY");
+}
+
+// ========================
+// Main loop
+// ========================
+void loop() {
+  parseSerialCommand();   // Get wheel commands from ROS
+  updateMotors();         // Drive motors
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= sendInterval) {
+    sendEncoderCounts();  // Send ticks back to ROS
+    lastSendTime = now;
+  }
+}
+
+// ========================
+// Parse serial commands like "R0.8,L0.5"
+// ========================
+void parseSerialCommand() {
+  while (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+
+    int rIndex = line.indexOf('R');
+    int lIndex = line.indexOf('L');
+    if (rIndex != -1 && lIndex != -1) {
+      float rSpeed = 0.0, lSpeed = 0.0;
+
+      int commaIndex = line.indexOf(',', rIndex);
+      if (commaIndex != -1) {
+        rSpeed = line.substring(rIndex + 1, commaIndex).toFloat();
+      }
+      lSpeed = line.substring(lIndex + 1).toFloat();
+
+      // Clamp -1.0 to 1.0
+      rightSpeedCmd = constrain(rSpeed, -1.0, 1.0);
+      leftSpeedCmd = constrain(lSpeed, -1.0, 1.0);
+    }
+  }
+}
+
+// ========================
+// Update motor directions and PWM
+// ========================
+void updateMotors() {
+  float leftPWMVal = abs(leftSpeedCmd);
+  float rightPWMVal = abs(rightSpeedCmd);
+
+  // Left motor
+  if (leftSpeedCmd >= 0) {
+    digitalWrite(motorA1, HIGH);
+    digitalWrite(motorA2, LOW);
+  } else {
+    digitalWrite(motorA1, LOW);
+    digitalWrite(motorA2, HIGH);
+  }
+  analogWrite(leftPWM, (int)(leftPWMVal * pwmMax));
+
+  // Right motor
+  if (rightSpeedCmd >= 0) {
+    digitalWrite(motorB1, HIGH);
+    digitalWrite(motorB2, LOW);
+  } else {
+    digitalWrite(motorB1, LOW);
+    digitalWrite(motorB2, HIGH);
+  }
+  analogWrite(rightPWM, (int)(rightPWMVal * pwmMax));
+}
+
+// ========================
+// Encoder interrupts
+// ========================
+void countLeft() { leftTicks++; }
+void countRight() { rightTicks++; }
+
+// ========================
+// Send ticks to ROS (format: ENC,left,right)
+// ========================
+void sendEncoderCounts() {
+  Serial.print("ENC,");
+  Serial.print(leftTicks);
+  Serial.print(",");
+  Serial.println(rightTicks);
+}
+
+
+no  left right back forward just clean code
+
+
+// ========================
+// Pin definitions (Uno)
+// ========================
+#define alarm 7
+#define red_light 6
+#define green_light 5
+
+#define motorA1 4     // Left motor direction pin 1
+#define motorA2 12    // Left motor direction pin 2
+#define motorB1 8     // Right motor direction pin 1
+#define motorB2 9     // Right motor direction pin 2
+#define leftPWM 10    // Left motor PWM (speed)
+#define rightPWM 11   // Right motor PWM (speed)
+
+#define leftEncoderPin 2   // Left encoder
+#define rightEncoderPin 3  // Right encoder
+
+// ========================
+// Encoder tick counts
+// ========================
+volatile long leftTicks = 0;
+volatile long rightTicks = 0;
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100; // Send encoder data every 100ms
+
+// ========================
+// Motor speed variables
+// ========================
+float leftSpeedCmd = 0.0;   // Range: -1.0 to 1.0
+float rightSpeedCmd = 0.0;  // Range: -1.0 to 1.0
+
+// PWM max
+const int pwmMax = 255;
+
+// ========================
+// Setup
+// ========================
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(alarm, OUTPUT);
+  pinMode(red_light, OUTPUT);
+  pinMode(green_light, OUTPUT);
+
+  pinMode(motorA1, OUTPUT);
+  pinMode(motorA2, OUTPUT);
+  pinMode(motorB1, OUTPUT);
+  pinMode(motorB2, OUTPUT);
+
+  pinMode(leftPWM, OUTPUT);
+  pinMode(rightPWM, OUTPUT);
+
+  // Encoder pins
+  pinMode(leftEncoderPin, INPUT_PULLUP);
+  pinMode(rightEncoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(leftEncoderPin), countLeft, RISING);
+  attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
+
+  Serial.println("READY");
+}
+
+// ========================
+// Main loop
+// ========================
+void loop() {
+  parseSerialCommand();   // Get wheel commands from ROS
+  updateMotors();         // Drive motors
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= sendInterval) {
+    sendEncoderCounts();  // Send ticks back to ROS
+    lastSendTime = now;
+  }
+}
+
+// ========================
+// Parse serial commands like "R0.8,L0.5"
+// ========================
+void parseSerialCommand() {
+  while (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+
+    int rIndex = line.indexOf('R');
+    int lIndex = line.indexOf('L');
+    if (rIndex != -1 && lIndex != -1) {
+      float rSpeed = 0.0, lSpeed = 0.0;
+
+      int commaIndex = line.indexOf(',', rIndex);
+      if (commaIndex != -1) {
+        rSpeed = line.substring(rIndex + 1, commaIndex).toFloat();
+      }
+      lSpeed = line.substring(lIndex + 1).toFloat();
+
+      // Clamp -1.0 to 1.0
+      rightSpeedCmd = constrain(rSpeed, -1.0, 1.0);
+      leftSpeedCmd = constrain(lSpeed, -1.0, 1.0);
+    }
+  }
+}
+
+// ========================
+// Update motor directions and PWM
+// ========================
+void updateMotors() {
+  float leftPWMVal = abs(leftSpeedCmd);
+  float rightPWMVal = abs(rightSpeedCmd);
+
+  // Left motor
+  if (leftSpeedCmd >= 0) {
+    digitalWrite(motorA1, HIGH);
+    digitalWrite(motorA2, LOW);
+  } else {
+    digitalWrite(motorA1, LOW);
+    digitalWrite(motorA2, HIGH);
+  }
+  analogWrite(leftPWM, (int)(leftPWMVal * pwmMax));
+
+  // Right motor
+  if (rightSpeedCmd >= 0) {
+    digitalWrite(motorB1, HIGH);
+    digitalWrite(motorB2, LOW);
+  } else {
+    digitalWrite(motorB1, LOW);
+    digitalWrite(motorB2, HIGH);
+  }
+  analogWrite(rightPWM, (int)(rightPWMVal * pwmMax));
+}
+
+// ========================
+// Encoder interrupts (direction-aware)
+// ========================
+void countLeft() {
+  if (leftSpeedCmd >= 0) {
+    leftTicks++;
+  } else {
+    leftTicks--;
+  }
+}
+
+void countRight() {
+  if (rightSpeedCmd >= 0) {
+    rightTicks++;
+  } else {
+    rightTicks--;
+  }
+}
+
+// ========================
+// Send ticks to ROS (format: ENC,left,right)
+// ========================
+void sendEncoderCounts() {
+  Serial.print("ENC,");
+  Serial.print(leftTicks);
+  Serial.print(",");
+  Serial.println(rightTicks);
+}
+
+
+updated one (but left and right is wrong)
+
+
+// ========================
+// Pin definitions (Uno)
+// ========================
+#define alarm 7
+#define red_light 6
+#define green_light 5
+
+#define motorA1 4     // Left motor direction pin 1
+#define motorA2 12    // Left motor direction pin 2
+#define motorB1 8     // Right motor direction pin 1
+#define motorB2 9     // Right motor direction pin 2
+#define leftPWM 10    // Left motor PWM (speed)
+#define rightPWM 11   // Right motor PWM (speed)
+
+#define leftEncoderPin 2   // Left encoder
+#define rightEncoderPin 3  // Right encoder
+
+// ========================
+// Encoder tick counts
+// ========================
+volatile long leftTicks = 0;
+volatile long rightTicks = 0;
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100; // Send encoder data every 100ms
+
+// ========================
+// Motor speed variables
+// ========================
+float leftSpeedCmd = 0.0;   // Range: -1.0 to 1.0
+float rightSpeedCmd = 0.0;  // Range: -1.0 to 1.0
+
+// ========================
+// Calibration factors
+// ========================
+const float leftCalibration  = 0.953;   // left motor (keep as baseline)
+const float rightCalibration = 1.0;   // >1.0 if right motor is slower
+
+// PWM max
+const int pwmMax = 255;
+
+// ========================
+// Setup
+// ========================
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(alarm, OUTPUT);
+  pinMode(red_light, OUTPUT);
+  pinMode(green_light, OUTPUT);
+
+  pinMode(motorA1, OUTPUT);
+  pinMode(motorA2, OUTPUT);
+  pinMode(motorB1, OUTPUT);
+  pinMode(motorB2, OUTPUT);
+
+  pinMode(leftPWM, OUTPUT);
+  pinMode(rightPWM, OUTPUT);
+
+  // Encoder pins
+  pinMode(leftEncoderPin, INPUT_PULLUP);
+  pinMode(rightEncoderPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(leftEncoderPin), countLeft, RISING);
+  attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
+
+  Serial.println("READY");
+}
+
+// ========================
+// Main loop
+// ========================
+void loop() {
+  parseSerialCommand();   // Get wheel commands from ROS
+  updateMotors();         // Drive motors
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= sendInterval) {
+    sendEncoderCounts();  // Send ticks back to ROS
+    lastSendTime = now;
+  }
+}
+
+// ========================
+// Parse serial commands like "R0.8,L0.5"
+// ========================
+void parseSerialCommand() {
+  while (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+
+    int rIndex = line.indexOf('R');
+    int lIndex = line.indexOf('L');
+    if (rIndex != -1 && lIndex != -1) {
+      float rSpeed = 0.0, lSpeed = 0.0;
+
+      int commaIndex = line.indexOf(',', rIndex);
+      if (commaIndex != -1) {
+        rSpeed = line.substring(rIndex + 1, commaIndex).toFloat();
+      }
+      lSpeed = line.substring(lIndex + 1).toFloat();
+
+      // Clamp -1.0 to 1.0
+      rightSpeedCmd = constrain(rSpeed, -1.0, 1.0);
+      leftSpeedCmd = constrain(lSpeed, -1.0, 1.0);
+    }
+  }
+}
+
+// ========================
+// Update motor directions and PWM
+// ========================
+void updateMotors() {
+  float leftPWMVal  = abs(leftSpeedCmd)  * leftCalibration;
+  float rightPWMVal = abs(rightSpeedCmd) * rightCalibration;
+
+  // Constrain after calibration
+  leftPWMVal  = constrain(leftPWMVal,  0.0, 1.0);
+  rightPWMVal = constrain(rightPWMVal, 0.0, 1.0);
+
+  // Left motor
+  if (leftSpeedCmd >= 0) {
+    digitalWrite(motorA1, HIGH);
+    digitalWrite(motorA2, LOW);
+  } else {
+    digitalWrite(motorA1, LOW);
+    digitalWrite(motorA2, HIGH);
+  }
+  analogWrite(leftPWM, (int)(leftPWMVal * pwmMax));
+
+  // Right motor
+  if (rightSpeedCmd >= 0) {
+    digitalWrite(motorB1, HIGH);
+    digitalWrite(motorB2, LOW);
+  } else {
+    digitalWrite(motorB1, LOW);
+    digitalWrite(motorB2, HIGH);
+  }
+  analogWrite(rightPWM, (int)(rightPWMVal * pwmMax));
+}
+
+// ========================
+// Encoder interrupts (direction-aware)
+// ========================
+void countLeft() {
+  if (leftSpeedCmd >= 0) {
+    leftTicks++;
+  } else {
+    leftTicks--;
+  }
+}
+
+void countRight() {
+  if (rightSpeedCmd >= 0) {
+    rightTicks++;
+  } else {
+    rightTicks--;
+  }
+}
+
+// ========================
+// Send ticks to ROS (format: ENC,left,right)
+// ========================
+void sendEncoderCounts() {
+  Serial.print("ENC,");
+  Serial.print(leftTicks);
+  Serial.print(",");
+  Serial.println(rightTicks);
+}
+
+
+(left and right is wrong)-but have calibration.
+
+
+
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/float32.hpp>
+#include <cv_bridge/cv_bridge.h>
+#include <opencv2/opencv.hpp>
+#include <thread>
+#include <mutex>
+
+class ThermalCameraNode : public rclcpp::Node
+{
+public:
+    ThermalCameraNode()
+    : Node("thermal_camera_node")
+    {
+        // Publishers
+        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+            "/thermal_camera/image_raw", 10);
+        temp_pub_ = this->create_publisher<std_msgs::msg::Float32>(
+            "/thermal_camera/hand_temperature", 10);
+
+        // Open thermal camera
+        cap_.open("/dev/video0", cv::CAP_V4L2);
+        if (!cap_.isOpened()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open /dev/video0");
+            rclcpp::shutdown();
+            return;
+        }
+
+        cap_.set(cv::CAP_PROP_CONVERT_RGB, 0);
+        cap_.set(cv::CAP_PROP_FRAME_WIDTH, 160);
+        cap_.set(cv::CAP_PROP_FRAME_HEIGHT, 120);
+        cap_.set(cv::CAP_PROP_FPS, 9);
+
+        RCLCPP_INFO(this->get_logger(), "Thermal camera opened");
+
+        // Thread for capture
+        capture_thread_ = std::thread(&ThermalCameraNode::captureLoop, this);
+
+        // Timer to publish frames
+        timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(100),
+            std::bind(&ThermalCameraNode::publishFrame, this));
+    }
+
+    ~ThermalCameraNode() {
+        stop_capture_ = true;
+        if (capture_thread_.joinable())
+            capture_thread_.join();
+    }
+
+private:
+    void captureLoop() {
+        cv::Mat frame;
+        while (!stop_capture_) {
+            cap_ >> frame;
+            if (frame.empty()) continue;
+
+            std::lock_guard<std::mutex> lock(frame_mutex_);
+            latest_frame_ = frame.clone();
+        }
+    }
+
+    void publishFrame() {
+        cv::Mat frame;
+        {
+            std::lock_guard<std::mutex> lock(frame_mutex_);
+            if (latest_frame_.empty()) return;
+            frame = latest_frame_;
+        }
+
+        cv::Mat frame16;
+
+        // Ensure 16-bit single channel
+        if (frame.type() == CV_16UC1) {
+            frame16 = frame;
+        } else if (frame.type() == CV_8UC1) {
+            frame.convertTo(frame16, CV_16UC1, 256.0); // upscale GREY
+        } else if (frame.type() == CV_8UC3) {
+            cv::Mat gray;
+            cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+            gray.convertTo(frame16, CV_16UC1, 256.0);
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Unsupported frame type: %d", frame.type());
+            return;
+        }
+
+        // Convert raw sensor data → Celsius
+        cv::Mat temp_C(frame16.size(), CV_32F);
+        for (int i = 0; i < frame16.rows; i++) {
+            for (int j = 0; j < frame16.cols; j++) {
+                float kelvin = static_cast<float>(frame16.at<uint16_t>(i,j)) / 100.0f; // centiKelvin → Kelvin
+                temp_C.at<float>(i,j) = kelvin - 273.15f;
+            }
+        }
+
+        // Threshold for hand region (> 28°C)
+        cv::Mat hand_mask;
+        cv::threshold(temp_C, hand_mask, 28.0, 1.0, cv::THRESH_BINARY);
+        hand_mask.convertTo(hand_mask, CV_8U);
+
+        // Find bounding box of hand region
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(hand_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        float avg_temp = 0.0f;
+        if (!contours.empty()) {
+            cv::Rect hand_bbox = cv::boundingRect(contours[0]);
+
+            // Compute average temp in this region
+            cv::Mat mask_roi = hand_mask(hand_bbox);
+            cv::Mat temp_roi = temp_C(hand_bbox);
+            cv::Scalar mean_val = cv::mean(temp_roi, mask_roi);
+            avg_temp = static_cast<float>(mean_val[0]);
+
+            // Draw bounding box
+            cv::rectangle(frame16, hand_bbox, cv::Scalar(65535), 2);
+
+            // Overlay text with temperature
+            cv::putText(frame16,
+                        std::to_string(static_cast<int>(avg_temp)) + "C",
+                        cv::Point(hand_bbox.x, hand_bbox.y - 5),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(65535), 1);
+        }
+
+        if (avg_temp > 0.0f) {
+            // Publish average hand temperature
+            std_msgs::msg::Float32 temp_msg;
+            temp_msg.data = avg_temp;
+            temp_pub_->publish(temp_msg);
+
+            RCLCPP_INFO(this->get_logger(), "Temp [C]: %.2f", avg_temp);
+        }
+
+        // Publish image (MONO16)
+        auto img_msg = cv_bridge::CvImage(
+            std_msgs::msg::Header(),
+            sensor_msgs::image_encodings::MONO16,
+            frame16
+        ).toImageMsg();
+        img_msg->header.stamp = this->now();
+        image_pub_->publish(*img_msg);
+    }
+
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr temp_pub_;
+    cv::VideoCapture cap_;
+    rclcpp::TimerBase::SharedPtr timer_;
+
+    std::thread capture_thread_;
+    std::mutex frame_mutex_;
+    cv::Mat latest_frame_;
+    bool stop_capture_ = false;
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<ThermalCameraNode>());
+    rclcpp::shutdown();
+    return 0;
+}
+
+(theraml camera node)
+
+
+
+
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/float32.hpp>
+#include <cv_bridge/cv_bridge.h>
+#include <opencv2/opencv.hpp>
+#include <thread>
+#include <mutex>
+
+class ThermalCameraNode : public rclcpp::Node
+{
+public:
+    ThermalCameraNode()
+        : Node("thermal_camera_node")
+    {
+        this->declare_parameter<std::string>("video_device", "/dev/video0");
+        this->get_parameter("video_device", video_device_);
+
+        // Publishers
+        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/thermal_camera/image_raw", 10);
+        temp_pub_ = this->create_publisher<std_msgs::msg::Float32>("/thermal_camera/body_temperature", 10);
+
+        // Open thermal camera with V4L2 backend
+        cap_.open(video_device_, cv::CAP_V4L2);
+        if (!cap_.isOpened()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open %s", video_device_.c_str());
+            rclcpp::shutdown();
+            return;
+        }
+
+        // Force Y16, 160x120, 9 FPS
+        cap_.set(cv::CAP_PROP_FRAME_WIDTH, 160);
+        cap_.set(cv::CAP_PROP_FRAME_HEIGHT, 120);
+        cap_.set(cv::CAP_PROP_FPS, 9);
+        cap_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('Y','1','6',' '));
+
+        // Start capture thread
+        capture_thread_ = std::thread(&ThermalCameraNode::captureLoop, this);
+
+        // Timer to publish frames
+        timer_ = this->create_wall_timer(std::chrono::milliseconds(100),
+                                         std::bind(&ThermalCameraNode::publishFrame, this));
+    }
+
+    ~ThermalCameraNode() {
+        stop_capture_ = true;
+        if (capture_thread_.joinable())
+            capture_thread_.join();
+    }
+
+private:
+    void captureLoop() {
+        cv::Mat frame;
+        while (!stop_capture_) {
+            cap_ >> frame;
+            if (frame.empty()) continue;
+
+            std::lock_guard<std::mutex> lock(frame_mutex_);
+            latest_frame_ = frame.clone();
+        }
+    }
+
+    void publishFrame() {
+        cv::Mat frame;
+        {
+            std::lock_guard<std::mutex> lock(frame_mutex_);
+            if (latest_frame_.empty()) return;
+            frame = latest_frame_;
+        }
+
+        cv::Mat display_frame;
+        float avg_temp = 0.0f;
+
+        // Ensure frame is 16-bit
+        if (frame.type() != CV_16UC1) {
+            RCLCPP_WARN(this->get_logger(), "Frame type not 16-bit, converting...");
+            if (frame.channels() == 3) {
+                cv::cvtColor(frame, frame, cv::COLOR_BGR2GRAY);
+            }
+            frame.convertTo(frame, CV_16U, 256); // scale 8-bit → 16-bit
+        }
+
+        // Convert to Celsius
+        cv::Mat temp_C;
+        frame.convertTo(temp_C, CV_32F, 1.0 / 100.0); // centiKelvin → Kelvin
+        temp_C = temp_C - 273.15f;                    // Kelvin → Celsius
+
+        // Mask for human body temps
+        cv::Mat mask;
+        cv::inRange(temp_C, 28.0, 40.0, mask);
+
+        // Find largest contour (assume person)
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        if (!contours.empty()) {
+            size_t largest_idx = 0;
+            double max_area = 0;
+            for (size_t i = 0; i < contours.size(); i++) {
+                double area = cv::contourArea(contours[i]);
+                if (area > max_area) {
+                    max_area = area;
+                    largest_idx = i;
+                }
+            }
+
+            cv::Rect roi = cv::boundingRect(contours[largest_idx]);
+            cv::Mat roi_temp = temp_C(roi);
+            cv::Scalar mean_val = cv::mean(roi_temp);
+            avg_temp = static_cast<float>(mean_val[0]);
+
+            // Color map for visualization
+            cv::normalize(temp_C, display_frame, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+            cv::applyColorMap(display_frame, display_frame, cv::COLORMAP_JET);
+            cv::rectangle(display_frame, roi, cv::Scalar(0, 255, 0), 2);
+        } else {
+            avg_temp = 0.0f;
+            cv::normalize(temp_C, display_frame, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+            cv::applyColorMap(display_frame, display_frame, cv::COLORMAP_JET);
+        }
+
+        // Publish temperature
+        if (avg_temp > 0.0f) {
+            std_msgs::msg::Float32 temp_msg;
+            temp_msg.data = avg_temp;
+            temp_pub_->publish(temp_msg);
+            RCLCPP_INFO(this->get_logger(), "Avg Body Temp [C]: %.2f", avg_temp);
+        }
+
+        // Publish image
+        std_msgs::msg::Header header;
+        header.stamp = this->now();
+        auto img_msg = cv_bridge::CvImage(header, sensor_msgs::image_encodings::BGR8, display_frame).toImageMsg();
+        image_pub_->publish(*img_msg);
+    }
+
+    // ROS
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr temp_pub_;
+    rclcpp::TimerBase::SharedPtr timer_;
+
+    // OpenCV
+    cv::VideoCapture cap_;
+    std::string video_device_;
+
+    // Threading
+    std::thread capture_thread_;
+    std::mutex frame_mutex_;
+    cv::Mat latest_frame_;
+    bool stop_capture_ = false;
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<ThermalCameraNode>());
+    rclcpp::shutdown();
+    return 0;
+}
+
+
+(updated thermal node)
+
+
+
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <fcntl.h>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <termios.h>
+#include <unistd.h>
+#include <vector>
+
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+
+using namespace std::chrono_literals;
+
+class MotorOdometryNode : public rclcpp::Node
+{
+public:
+  MotorOdometryNode()
+  : Node("motor_odometry_node"),
+    serial_fd_(-1),
+    x_(0.0), y_(0.0), th_(0.0),
+    left_pos_(0.0), right_pos_(0.0),
+    v_lin_(0.0), v_ang_(0.0),
+    has_last_time_(false)
+  {
+    // ---- Parameters ----
+    port_             = this->declare_parameter<std::string>("port", "/dev/ttyUSB0");
+    baud_             = this->declare_parameter<int>("baud", 115200);
+    wheel_radius_     = this->declare_parameter<double>("wheel_radius", 0.033);
+    wheel_base_       = this->declare_parameter<double>("wheel_base", 0.160);
+    ticks_per_rev_    = this->declare_parameter<int>("ticks_per_rev", 600);
+    max_wheel_radps_  = this->declare_parameter<double>("max_wheel_radps", 12.0);
+    publish_tf_       = this->declare_parameter<bool>("publish_tf", true);
+    invert_left_      = this->declare_parameter<bool>("invert_left", false);
+    invert_right_     = this->declare_parameter<bool>("invert_right",false);
+
+
+    // ---- Serial ----
+    openSerial();
+
+    // ---- ROS I/O ----
+    cmd_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+      "/cmd_vel", 10,
+      std::bind(&MotorOdometryNode::cmdVelCb, this, std::placeholders::_1));
+
+    odom_pub_  = this->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
+    joint_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
+
+    if (publish_tf_)
+      tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+
+    // Timer: read serial + publish
+    timer_ = this->create_wall_timer(50ms, std::bind(&MotorOdometryNode::onTimer, this));
+
+    RCLCPP_INFO(get_logger(), "Motor odometry node started: port=%s baud=%d", port_.c_str(), baud_);
+  }
+
+  ~MotorOdometryNode() override
+  {
+    if (serial_fd_ >= 0) {
+      std::string stop = "R0,L0\n";
+      (void)write(serial_fd_, stop.c_str(), stop.size());
+      close(serial_fd_);
+    }
+  }
+
+private:
+  // Serial initialization
+  void openSerial()
+  {
+    serial_fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (serial_fd_ < 0) {
+      RCLCPP_FATAL(get_logger(), "Failed to open serial port %s: %s", port_.c_str(), strerror(errno));
+      throw std::runtime_error("serial open failed");
+    }
+
+    termios tty{};
+    if (tcgetattr(serial_fd_, &tty) != 0) {
+      RCLCPP_FATAL(get_logger(), "tcgetattr failed: %s", strerror(errno));
+      throw std::runtime_error("tcgetattr failed");
+    }
+
+    speed_t spd = B115200;
+    switch (baud_) {
+      case 9600: spd = B9600; break;
+      case 19200: spd = B19200; break;
+      case 38400: spd = B38400; break;
+      case 57600: spd = B57600; break;
+      case 115200: spd = B115200; break;
+      default:
+        spd = B115200; break;
+    }
+
+    cfsetospeed(&tty, spd);
+    cfsetispeed(&tty, spd);
+
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
+    tty.c_iflag &= ~IGNBRK;
+    tty.c_lflag = 0;
+    tty.c_oflag = 0;
+    tty.c_cc[VMIN]  = 0;
+    tty.c_cc[VTIME] = 1;
+
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY);
+    tty.c_cflag |= (CLOCAL | CREAD);
+    tty.c_cflag &= ~(PARENB | PARODD | CSTOPB | CRTSCTS);
+
+    if (tcsetattr(serial_fd_, TCSANOW, &tty) != 0) {
+      RCLCPP_FATAL(get_logger(), "tcsetattr failed: %s", strerror(errno));
+      throw std::runtime_error("tcsetattr failed");
+    }
+  }
+
+  void writeCommand(double left_w_radps, double right_w_radps)
+  {
+    double l = std::clamp(left_w_radps  / max_wheel_radps_, -1.0, 1.0);
+    double r = std::clamp(right_w_radps / max_wheel_radps_, -1.0, 1.0);
+    if (invert_left_)  l = -l;
+    if (invert_right_) r = -r;
+
+    std::ostringstream ss;
+    ss.setf(std::ios::fixed); ss.precision(3);
+    ss << "R" << r << ",L" << l << "\n";
+    const std::string out = ss.str();
+
+    if (serial_fd_ >= 0)
+      (void)write(serial_fd_, out.c_str(), out.size());
+  }
+
+  void readSerialAndProcess()
+  {
+    if (serial_fd_ < 0) return;
+
+    char buf[256];
+    for (;;) {
+      int n = read(serial_fd_, buf, sizeof(buf));
+      if (n > 0) rx_buffer_.append(buf, n);
+      else break;
+    }
+
+    size_t pos;
+    while ((pos = rx_buffer_.find('\n')) != std::string::npos) {
+      std::string line = rx_buffer_.substr(0, pos);
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      rx_buffer_.erase(0, pos + 1);
+      handleLine(line);
+    }
+  }
+
+  void handleLine(const std::string &line)
+  {
+    if (line.rfind("ENC", 0) == 0) {
+      long lt=0, rt=0;
+      if (sscanf(line.c_str(), "ENC,%ld,%ld", &lt, &rt) == 2)
+        onEncoder(lt, rt);
+    }
+  }
+
+  void cmdVelCb(const geometry_msgs::msg::Twist::SharedPtr msg)
+  {
+    v_lin_ = msg->linear.x;
+    v_ang_ = msg->angular.z;
+
+    double v_r = (2.0 * v_lin_ + v_ang_ * wheel_base_) / (2.0 * wheel_radius_);
+    double v_l = (2.0 * v_lin_ - v_ang_ * wheel_base_) / (2.0 * wheel_radius_);
+
+    writeCommand(v_l, v_r);
+  }
+
+  void onTimer()
+  {
+    readSerialAndProcess();
+    publishJointStates(this->get_clock()->now());
+  }
+
+  void onEncoder(long left_ticks, long right_ticks)
+  {
+    rclcpp::Time now = this->get_clock()->now();
+    if (!has_last_time_) {
+      last_time_ = now;
+      prev_left_ticks_ = left_ticks;
+      prev_right_ticks_ = right_ticks;
+      has_last_time_ = true;
+      return;
+    }
+
+    double dt = (now - last_time_).seconds();
+    if (dt <= 0.0) {
+      last_time_ = now;
+      prev_left_ticks_ = left_ticks;
+      prev_right_ticks_ = right_ticks;
+      return;
+    }
+
+    long dL_ticks = left_ticks  - prev_left_ticks_;
+    long dR_ticks = right_ticks - prev_right_ticks_;
+    prev_left_ticks_  = left_ticks;
+    prev_right_ticks_ = right_ticks;
+    last_time_ = now;
+
+    double meters_per_tick = (2.0 * M_PI * wheel_radius_) / static_cast<double>(ticks_per_rev_);
+    double dL = dL_ticks * meters_per_tick;
+    double dR = dR_ticks * meters_per_tick;
+
+    if (invert_left_)  dL = -dL;
+    if (invert_right_) dR = -dR;
+
+    double d_center = 0.5 * (dL + dR);
+    double d_theta  = (dR - dL) / wheel_base_;
+
+    double th_mid = th_ + 0.5 * d_theta;
+    x_  += d_center * std::cos(th_mid);
+    y_  += d_center * std::sin(th_mid);
+    th_ += d_theta;
+
+    double v_lin_est = d_center / dt;
+    double v_ang_est = d_theta  / dt;
+
+    publishOdom(now, v_lin_est, v_ang_est);
+    updateWheelPositions(dt, v_lin_est, v_ang_est);
+    publishJointStates(now);
+    if (publish_tf_) publishTF(now);
+  }
+
+  void publishOdom(const rclcpp::Time &stamp, double v_lin, double v_ang)
+  {
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, th_);
+
+    nav_msgs::msg::Odometry odom;
+    odom.header.stamp = stamp;
+    odom.header.frame_id = "odom";
+    odom.child_frame_id  = "base_footprint";
+    odom.pose.pose.position.x = x_;
+    odom.pose.pose.position.y = y_;
+    odom.pose.pose.orientation = tf2::toMsg(q);
+    odom.twist.twist.linear.x = v_lin;
+    odom.twist.twist.angular.z = v_ang;
+
+    odom_pub_->publish(odom);
+  }
+
+  void publishTF(const rclcpp::Time &stamp)
+  {
+    geometry_msgs::msg::TransformStamped t;
+    t.header.stamp = stamp;
+    t.header.frame_id = "odom";
+    t.child_frame_id  = "base_footprint";
+
+    t.transform.translation.x = x_;
+    t.transform.translation.y = y_;
+    t.transform.translation.z = 0.0;
+
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, th_);
+    t.transform.rotation = tf2::toMsg(q);
+
+    tf_broadcaster_->sendTransform(t);
+  }
+
+  void updateWheelPositions(double dt, double v_lin, double v_ang)
+  {
+    double w_l = (2.0 * v_lin - v_ang * wheel_base_) / (2.0 * wheel_radius_);
+    double w_r = (2.0 * v_lin + v_ang * wheel_base_) / (2.0 * wheel_radius_);
+
+    left_pos_  += w_l * dt;
+    right_pos_ += w_r * dt;
+  }
+
+  void publishJointStates(const rclcpp::Time &stamp)
+  {
+    sensor_msgs::msg::JointState js;
+    js.header.stamp = stamp;
+    js.name = {"left_wheel_joint", "right_wheel_joint"};
+    js.position = {left_pos_, right_pos_};
+    joint_pub_->publish(js);
+  }
+
+  // ==== Members ====
+  std::string port_;
+  int baud_;
+  double wheel_radius_;
+  double wheel_base_;
+  int ticks_per_rev_;
+  double max_wheel_radps_;
+  bool publish_tf_;
+  bool invert_left_;
+  bool invert_right_;
+
+  int serial_fd_;
+  std::string rx_buffer_;
+
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_pub_;
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  rclcpp::TimerBase::SharedPtr timer_;
+
+  double x_, y_, th_;
+  double left_pos_, right_pos_;
+  double v_lin_, v_ang_;
+
+  long prev_left_ticks_  = 0;
+  long prev_right_ticks_ = 0;
+
+  rclcpp::Time last_time_;
+  bool has_last_time_;
+};
+
+int main(int argc, char** argv)
+{
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<MotorOdometryNode>());
+  rclcpp::shutdown();
+  return 0;
+}
+(motor_odometry_node-latest)
+
+
+
+colcon build --symlink-install \
+  --packages-select \
+    robot_base \
+    robot_bringup \
+    robot_desc \
+    robot_hardware \
+    robot_maps \
+    rplidar_ros \
+    nav2_bt_navigator \
+    nav2_behavior_tree \
+    nav2_planner \
+    nav2_controller \
+    nav2_core \
+    nav2_util \
+    nav2_costmap_2d \
+    nav2_msgs \
+    nav2_lifecycle_manager \
+    nav2_map_server \
+    nav2_amcl \
+    nav2_voxel_grid \
+  --allow-overriding nav2_bt_navigator
+(colcon build certain file only)
+
+
+
+
+
+
+# Map Server (static map)
+        Node(
+            package='nav2_map_server',
+            executable='map_server',
+            name='map_server',
+            output='screen',
+            parameters=[{'yaml_filename': map_yaml_file}]
+        ),
+
+        # AMCL (localization using the static map)
+        Node(
+            package='nav2_amcl',
+            executable='amcl',
+            name='amcl',
+            output='screen',
+            parameters=[nav2_params_file]
+        ),
+
+       
+        # Nav2 Planner
+        Node(
+            package='nav2_planner',
+            executable='planner_server',
+            name='planner_server',
+            output='screen',
+            parameters=[nav2_params_file]
+        ),
+
+        # Nav2 Controller
+        Node(
+            package='nav2_controller',
+            executable='controller_server',
+            name='controller_server',
+            output='screen',
+            parameters=[nav2_params_file]
+        ),
+
+        # Nav2 BT Navigator
+        Node(
+            package='nav2_bt_navigator',
+            executable='bt_navigator',
+            name='bt_navigator',
+            output='screen',
+            parameters=[nav2_params_file]
+       ),
+       
+        # Nav2 Behaviors
+        Node(
+            package='nav2_behaviors',
+            executable='behavior_server',
+            name='behavior_server',
+            output='screen',
+         parameters=[nav2_params_file]
+         
+       ),
+       
+        # Lifecycle Manager
+        Node(
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_navigation',
+            output='screen',
+            parameters=[{
+                'use_sim_time': False,
+                'autostart': True,
+                'node_names': [
+                    'map_server',
+                    'amcl',
+                    'planner_server',
+                    'controller_server',
+                    'bt_navigator',
+                    'behavior_server'
+                ]
+            }]
+        ),
+         

@@ -111,7 +111,7 @@ private:
         geometry_msgs::msg::TransformStamped tf;
         tf.header.stamp = current_time;
         tf.header.frame_id = "odom";
-        tf.child_frame_id = "base_link";
+        tf.child_frame_id = "base_footprint";
         tf.transform.translation.x = x_;
         tf.transform.translation.y = y_;
         tf.transform.translation.z = 0.0;
