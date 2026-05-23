@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 import os
 import math
+import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from geometry_msgs.msg import Twist
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from geometry_msgs.msg import Twist, TwistStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Empty
 from visualization_msgs.msg import Marker
+from turtlebot3_msgs.srv import Goal, Dqn
 
-# NOTE: We assume you have these messages since you have the turtlebot3_msgs package.
-# If this fails, we can switch to standard messages.
-try:
-    from turtlebot3_msgs.srv import Dqn
-except ImportError:
-    print("ERROR: turtlebot3_msgs not found. Please install them or ask for a version without them.")
+ROS_DISTRO = os.environ.get('ROS_DISTRO')
+
 
 class RLEnvironment(Node):
     def __init__(self):
         super().__init__('rl_environment')
 
-        # --- CONFIGURATION FOR PATROL ROBOT ---
-        self.goal_pose_x = 2.0  # Fixed Goal X
-        self.goal_pose_y = 0.0  # Fixed Goal Y
+        # Robot and goal states
+        self.goal_pose_x = 2.0
+        self.goal_pose_y = 2.0
         self.robot_pose_x = 0.0
         self.robot_pose_y = 0.0
         self.robot_pose_theta = 0.0
@@ -36,216 +35,441 @@ class RLEnvironment(Node):
         self.local_step = 0
         self.max_step = 600
 
-        # Discrete angular actions (Left/Right turns)
+        # Discrete angular actions
         self.angular_vel = [0.6, 0.3, 0.0, -0.3, -0.6]
 
-        # Laser scan settings (UPDATED FOR YOUR ROBOT)
-        self.front_ranges = []
-        self.front_angles = []
+        # Lidar configuration
+        # FIX: Use full 360° scan sampled at max_beams evenly-spaced points.
+        # Previously only ±45° was used, leaving the robot blind to side and
+        # rear obstacles. The state_size (26) stays unchanged because we still
+        # pass exactly max_beams values — but they now cover the full circle.
         self.max_beams = 24
-        self.lidar_max_range = 6.0  # Changed from 3.5 to match your URDF
+        self.lidar_max_range = 6.0   # matches URDF: <max>6.0</max> in the lidar sensor block
+        self.full_ranges = []        # raw 360° scan (used for collision detection)
+        self.sampled_ranges = []     # max_beams evenly-sampled values (used in state)
+        self.min_obstacle_distance = self.lidar_max_range
 
-        # Collision settings (UPDATED)
-        # 0.30 is safer for your robot size (Turtlebot was 0.15)
-        self.collision_dist = 0.30 
+        # Last command (for reward shaping)
+        self.last_cmd_linear_x = 0.0
+        self.last_cmd_angular_z = 0.0
 
-        # ROS Setup
-        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.marker_pub = self.create_publisher(Marker, 'goal_marker', 10)
-        
-        self.odom_sub = self.create_subscription(Odometry, 'odom', self.odom_sub_callback, 10)
-        self.scan_sub = self.create_subscription(LaserScan, 'scan', self.scan_sub_callback, 10)
-
-        # STANDARD GAZEBO RESET SERVICE (Replaces custom TurtleBot services)
-        self.reset_client = self.create_client(Empty, '/reset_simulation')
-
-        # Services provided to the Agent (The PPO Brain talks to these)
-        self.reset_environment_srv = self.create_service(Dqn, 'reset_environment', self.handle_reset_environment)
-        self.rl_agent_interface_srv = self.create_service(Dqn, 'rl_agent_interface', self.handle_rl_agent_interface)
-
-        # Initialization
-        self.goal_distance = 0.0
-        self.goal_angle = 0.0
+        # Goal distance tracking (raw metres)
         self.init_goal_distance = 0.0
-        
-        self.get_logger().info("Patrol Robot Environment Node Started")
+        self.prev_goal_distance = 0.0
 
-    # ------------------------
-    # MOVEMENT
-    # ------------------------
+        # Reward / collision hyperparams
+        self.collision_penalty = -50.0
+        self.success_reward = 100.0
+        self.min_safe_dist = 0.35
+        self.obstacle_reward_scale = 0.4  # increased from 0.2 — stronger avoidance signal
+        self.collision_threshold = 0.18 # metres
+
+        # Fresh scan gate for safe resets
+        self._scan_received = False
+
+        # ROS QoS
+        qos = 10
+        self.use_twist = (ROS_DISTRO == 'humble')
+        if self.use_twist:
+            self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', qos)
+        else:
+            self.cmd_vel_pub = self.create_publisher(TwistStamped, 'cmd_vel', qos)
+
+        self.marker_pub = self.create_publisher(Marker, 'goal_marker', 10)
+        self.odom_sub = self.create_subscription(Odometry, 'odom', self.odom_sub_callback, qos)
+        self.scan_sub = self.create_subscription(LaserScan, 'scan', self.scan_sub_callback, qos)
+
+        # Service clients — ReentrantCallbackGroup allows blocking .call() inside callbacks
+        self.clients_callback_group = ReentrantCallbackGroup()
+        self.initialize_environment_client = self.create_client(
+            Goal, 'initialize_env', callback_group=self.clients_callback_group)
+        self.task_succeed_client = self.create_client(
+            Goal, 'task_succeed', callback_group=self.clients_callback_group)
+        self.task_failed_client = self.create_client(
+            Goal, 'task_failed', callback_group=self.clients_callback_group)
+
+        # Services provided to the PPO agent
+        self.make_environment_srv = self.create_service(
+            Empty, 'make_environment', self.handle_make_environment,
+            callback_group=self.clients_callback_group)
+        self.reset_environment_srv = self.create_service(
+            Dqn, 'reset_environment', self.handle_reset_environment,
+            callback_group=self.clients_callback_group)
+        self.rl_agent_interface_srv = self.create_service(
+            Dqn, 'rl_agent_interface', self.handle_rl_agent_interface,
+            callback_group=self.clients_callback_group)
+
+        self.goal_distance = math.hypot(self.goal_pose_x, self.goal_pose_y)
+        self.goal_angle = 0.0
+
+    # ------------------------------------------------------------------ #
+    # Velocity publishing
+    # ------------------------------------------------------------------ #
     def publish_twist(self, linear_x=0.0, angular_z=0.0):
-        msg = Twist()
-        msg.linear.x = float(np.clip(linear_x, -0.4, 0.4))
-        msg.angular.z = float(np.clip(angular_z, -1.0, 1.0))
-        self.cmd_vel_pub.publish(msg)
-        self.last_cmd_linear_x = msg.linear.x
-        self.last_cmd_angular_z = msg.angular.z
+        self.last_cmd_linear_x = float(linear_x)
+        self.last_cmd_angular_z = float(angular_z)
+        linear_x  = float(np.clip(linear_x,  -0.4, 0.4))
+        angular_z = float(np.clip(angular_z, -1.0, 1.0))
+
+        if self.use_twist:
+            msg = Twist()
+            msg.linear.x = linear_x
+            msg.angular.z = angular_z
+            self.cmd_vel_pub.publish(msg)
+        else:
+            ts = TwistStamped()
+            ts.header.stamp = self.get_clock().now().to_msg()
+            ts.twist.linear.x = linear_x
+            ts.twist.angular.z = angular_z
+            self.cmd_vel_pub.publish(ts)
 
     def stop_robot(self):
         self.publish_twist(0.0, 0.0)
 
-    # ------------------------
-    # SERVICE HANDLERS (The Bridge to PPO)
-    # ------------------------
-    def handle_reset_environment(self, request, response):
-        """Called by PPO agent at the start of every episode"""
-        self.get_logger().info("Resetting Environment...")
-        
-        # 1. Reset Gazebo
-        req = Empty.Request()
-        while not self.reset_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('Waiting for /reset_simulation service...')
-        self.reset_client.call_async(req)
+    # ------------------------------------------------------------------ #
+    # Goal marker
+    # ------------------------------------------------------------------ #
+    def publish_goal_marker(self):
+        marker = Marker()
+        marker.header.frame_id = "odom"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "goal"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = self.goal_pose_x
+        marker.pose.position.y = self.goal_pose_y
+        marker.pose.position.z = 0.05
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = marker.scale.y = marker.scale.z = 0.2
+        marker.color.r = 1.0
+        marker.color.a = 1.0
+        self.marker_pub.publish(marker)
 
-        # 2. Reset Variables
+    # ------------------------------------------------------------------ #
+    # Fresh scan gate
+    # ------------------------------------------------------------------ #
+    def _wait_for_fresh_scan(self, timeout=2.0):
+        self._scan_received = False
+        start = time.time()
+        while not self._scan_received and (time.time() - start) < timeout:
+            time.sleep(0.05)
+
+    # ------------------------------------------------------------------ #
+    # Front obstacle distance (for speed heuristic only)
+    # ------------------------------------------------------------------ #
+    def _front_obstacle_distance(self):
+        """Minimum distance in the forward ±60° arc only.
+        Used by the speed heuristic so the robot does not slow down
+        because of pillars to its side or behind it."""
+        if not self.sampled_ranges:
+            return self.lidar_max_range
+        n = len(self.sampled_ranges)
+        angles = np.linspace(-math.pi, math.pi, n, endpoint=False)
+        front_mask = np.abs(angles) < math.radians(60)
+        front_ranges = np.array(self.sampled_ranges)[front_mask]
+        if len(front_ranges) == 0:
+            return self.lidar_max_range
+        return float(np.min(front_ranges))
+
+    # ------------------------------------------------------------------ #
+    # Service handlers
+    # ------------------------------------------------------------------ #
+    def handle_make_environment(self, request, response):
+        self.get_logger().info("make_environment called")
+        self.make_environment()
+        return response
+
+    def handle_reset_environment(self, request, response):
+        self.get_logger().info("reset_environment called")
+        self.make_environment()
+
+        # Wait for fresh sensor data instead of blind sleep
+        self._wait_for_fresh_scan(timeout=2.0)
+        time.sleep(0.3)  # short extra settle time for odom
+
+        # Reset episode state cleanly
+        self.local_step = 0
         self.done = False
         self.succeed = False
         self.fail = False
-        self.local_step = 0
-        self.publish_goal_marker()
 
-        # 3. Calculate initial state
-        state = self.calculate_state()
-        self.init_goal_distance = state[0] * 5.0 # Un-normalize for storage
+        # FIX: Store raw metres, not the normalised state value.
+        # Previously state[0] = goal_distance/5.0 was stored as prev_goal_distance,
+        # then progress = prev - goal_distance was computed in raw metres → wrong scale.
+        self.init_goal_distance = self.goal_distance   # raw metres
+        self.prev_goal_distance = self.goal_distance   # raw metres
+
+        # Use pure observation — no termination checks on reset
+        state = self._build_state_vector()
         response.state = state
         return response
 
     def handle_rl_agent_interface(self, request, response):
-        """Called by PPO agent every single step"""
-        # 1. Convert Action (0-4) to Velocity
+        """Apply agent action, step simulation, return (state, reward, done)."""
+        # --- Linear velocity: heuristic based on heading error and obstacles ---
+        base_linear = 0.2
+        max_linear  = 0.4
+        angle_scale = max(0.0, 1.0 - abs(self.goal_angle) / math.pi)
+        linear_x = base_linear + (max_linear - base_linear) * angle_scale
+
+        # Scale down near obstacles (front sector only for this heuristic)
+        # FIX: Use front ±60° arc instead of global min_obstacle_distance.
+        # The global min includes side/rear beams, which caused the robot to
+        # crawl when passing between pillars even though the path ahead was clear.
+        front_min = self._front_obstacle_distance()
+        if front_min < self.min_safe_dist:
+            obstacle_scale = float(np.clip(
+                (front_min - 0.1) / (self.min_safe_dist - 0.1), 0.4, 1.0))
+            linear_x *= obstacle_scale
+
+        linear_x = float(np.clip(linear_x, 0.0, max_linear))
+
+        # Angular velocity from discrete PPO action
         angular_z = float(self.angular_vel[request.action])
-        
-        # Simple Linear Logic: Move fast if goal is straight, slow if turning
-        linear_x = 0.2 # Base speed
-        if abs(angular_z) < 0.1: linear_x = 0.4 # Faster if straight
 
         self.publish_twist(linear_x, angular_z)
+        self.get_logger().debug(
+            f"Step {self.local_step} | lin={linear_x:.2f} ang={angular_z:.2f} "
+            f"| nearest={self.min_obstacle_distance:.2f}m")
 
-        # 2. Calculate State & Reward
-        state = self.calculate_state()
+        # Wait for Gazebo physics to propagate the command.
+        # Note: time.sleep inside a callback thread is acceptable when using
+        # MultiThreadedExecutor (other threads remain active), but keep it short.
+        time.sleep(0.1)
+
+        state  = self.calculate_state()
         reward = self.calculate_reward()
-        
-        response.state = state
+        done   = self.done
+
+        response.state  = state
         response.reward = reward
-        response.done = self.done
-        
-        if self.done:
-            self.stop_robot()
-            # Reset flags for next run
-            self.done = False
+        response.done   = done
+
+        if done:
+            self.done    = False
             self.succeed = False
-            self.fail = False
+            self.fail    = False
 
         return response
 
-    # ------------------------
-    # SENSORS
-    # ------------------------
+    # ------------------------------------------------------------------ #
+    # Sensor callbacks
+    # ------------------------------------------------------------------ #
     def odom_sub_callback(self, msg):
         self.robot_pose_x = msg.pose.pose.position.x
         self.robot_pose_y = msg.pose.pose.position.y
         _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
 
-        # Calculate Goal Info
-        dx = self.goal_pose_x - self.robot_pose_x
-        dy = self.goal_pose_y - self.robot_pose_y
-        self.goal_distance = math.hypot(dx, dy)
-        
-        path_theta = math.atan2(dy, dx)
+        self.goal_distance = math.hypot(
+            self.goal_pose_x - self.robot_pose_x,
+            self.goal_pose_y - self.robot_pose_y)
+
+        path_theta = math.atan2(
+            self.goal_pose_y - self.robot_pose_y,
+            self.goal_pose_x - self.robot_pose_x)
         goal_angle = path_theta - self.robot_pose_theta
         self.goal_angle = (goal_angle + math.pi) % (2 * math.pi) - math.pi
 
     def scan_sub_callback(self, scan):
-        # Handle Lidar Data
         ranges = np.array(scan.ranges, dtype=np.float32)
-        # Replace inf with max range (6.0 for your robot)
         ranges = np.where(np.isinf(ranges), self.lidar_max_range, ranges)
         ranges = np.where(np.isnan(ranges), self.lidar_max_range, ranges)
+        ranges = np.clip(ranges, 0.0, self.lidar_max_range)
 
-        self.min_obstacle_distance = float(np.min(ranges)) if ranges.size > 0 else self.lidar_max_range
+        self.full_ranges = ranges.tolist()
 
-        # Filter for front beams (+/- 45 degrees)
-        self.front_ranges = []
-        num_ranges = len(ranges)
-        # Approximate indices for +/- 45 degrees
-        for i, r in enumerate(ranges):
-            angle = scan.angle_min + i * scan.angle_increment
-            if -0.78 < angle < 0.78: # +/- 45 degrees in radians
-                self.front_ranges.append(float(r))
+        # Global minimum across all 360° — used for collision detection
+        self.min_obstacle_distance = float(np.min(ranges)) if len(ranges) > 0 else self.lidar_max_range
 
-    # ------------------------
-    # STATE & REWARD
-    # ------------------------
-    def calculate_state(self):
-        self.local_step += 1
+        # FIX: Sample max_beams evenly from the full 360° scan.
+        # This gives the agent full situational awareness (front, sides, rear)
+        # without changing state_size. Previously only ±45° was visible.
+        n = len(ranges)
+        if n >= self.max_beams:
+            indices = np.linspace(0, n - 1, self.max_beams, dtype=int)
+            self.sampled_ranges = ranges[indices].tolist()
+        else:
+            # Pad if fewer beams than expected (shouldn't happen with 360-sample lidar)
+            pad = [self.lidar_max_range] * (self.max_beams - n)
+            self.sampled_ranges = ranges.tolist() + pad
 
-        # Check Termination
-        if self.min_obstacle_distance < self.collision_dist:
-            self.get_logger().info('CRASH!')
-            self.fail = True
-            self.done = True
-        elif self.goal_distance < 0.25:
-            self.get_logger().info('GOAL REACHED!')
-            self.succeed = True
-            self.done = True
-        elif self.local_step >= self.max_step:
-            self.get_logger().info('TIMEOUT')
-            self.done = True
+        self._scan_received = True
 
-        # Prepare Lidar State (24 beams)
-        front = list(self.front_ranges)
-        # Resize to exactly self.max_beams
-        if len(front) > self.max_beams:
-            step = len(front) // self.max_beams
-            front = front[::step][:self.max_beams]
-        while len(front) < self.max_beams:
-            front.append(self.lidar_max_range)
+    # ------------------------------------------------------------------ #
+    # Environment reset
+    # ------------------------------------------------------------------ #
+    def make_environment(self):
+        while not self.initialize_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for initialize_env service...')
+        req = Goal.Request()
+        result = self.initialize_environment_client.call(req)
+        self.goal_pose_x = result.pose_x
+        self.goal_pose_y = result.pose_y
+        self.get_logger().info(f"Goal set to [{self.goal_pose_x:.2f}, {self.goal_pose_y:.2f}]")
+        self.publish_goal_marker()
 
-        # State Vector: [Goal Dist, Goal Angle, ...Lidar Beams...]
-        state = [self.goal_distance / 5.0, self.goal_angle / math.pi] + [r for r in front]
+    def call_task_succeed(self):
+        while not self.task_succeed_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for task_succeed service...')
+        self.task_succeed_client.call(Goal.Request())
+
+    def call_task_failed(self):
+        while not self.task_failed_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for task_failed service...')
+        self.task_failed_client.call(Goal.Request())
+
+    # ------------------------------------------------------------------ #
+    # RL calculations
+    # ------------------------------------------------------------------ #
+    def _build_state_vector(self):
+        """Pure observation — no side effects."""
+        beams = list(self.sampled_ranges) if self.sampled_ranges else [self.lidar_max_range] * self.max_beams
+        if len(beams) > self.max_beams:
+            beams = beams[:self.max_beams]
+        else:
+            beams += [self.lidar_max_range] * (self.max_beams - len(beams))
+
+        normalized_beams = [float(r) / self.lidar_max_range for r in beams]
+
+        state = [
+            self.goal_distance / 5.0,          # normalized distance
+            self.goal_angle / math.pi           # normalized angle [-1, 1]
+        ] + normalized_beams                   # 24 beams, each in [0, 1]
+
         return state
 
-    def calculate_reward(self):
-        if self.fail: return -20.0
-        if self.succeed: return 100.0
+    def calculate_state(self):
+        """Step logic: increment counter, check termination, return state."""
+        self.local_step += 1
 
-        # Reward for getting closer to goal
-        reward = (self.init_goal_distance - self.goal_distance) * 2.0
+        # Termination checks
+        if self.min_obstacle_distance < self.collision_threshold:
+            self.get_logger().info(f'Collision! dist={self.min_obstacle_distance:.3f}m')
+            self.fail = self.done = True
+            self.stop_robot()
+            self.local_step = 0
+            self.call_task_failed()
+        elif self.goal_distance < 0.20:
+            self.get_logger().info('Goal reached!')
+            self.succeed = self.done = True
+            self.stop_robot()
+            self.local_step = 0
+            self.call_task_succeed()
+        elif self.local_step >= self.max_step:
+            self.get_logger().info('Timeout.')
+            self.done = True
+            self.stop_robot()
+            self.local_step = 0
+            self.call_task_failed()
+
+        return self._build_state_vector()
+
+    def calculate_reward(self):
+        if self.fail:
+            return float(self.collision_penalty)
+        if self.succeed:
+            return float(self.success_reward)
+
+        # Progress reward — allow negative so drifting away is penalized
+        # FIX: prev_goal_distance is now stored in raw metres (fixed in reset),
+        # so this subtraction is correctly scaled.
+        progress = self.prev_goal_distance - self.goal_distance
+        self.prev_goal_distance = self.goal_distance
+        progress_reward = 10.0 * progress
+
+        # Heading alignment reward
+        yaw_reward = 2.0 * (1.0 - 2.0 * abs(self.goal_angle) / math.pi)
+
+        # Forward velocity reward
+        vel = self.last_cmd_linear_x
+        velocity_reward = 0.5 * vel / 0.4
+
+        # Penalties
+        standing_penalty = -0.02 if vel < 0.03 and abs(self.last_cmd_angular_z) < 0.05 else 0.0
+        spin_penalty = -0.05 * abs(self.last_cmd_angular_z)
+        time_penalty = -0.03  # small per-step cost to encourage reaching goal quickly
+
+        # Obstacle proximity penalty (uses sampled beams, consistent with state)
+        obstacle_reward = self.compute_weighted_obstacle_reward()
+        obstacle_reward = float(np.clip(obstacle_reward * self.obstacle_reward_scale, -1.0, 0.0))
+
+        reward = (0.1  * yaw_reward
+                + 1.0  * progress_reward
+                + 0.2  * velocity_reward
+                + 0.4  * obstacle_reward
+                +        standing_penalty
+                +        spin_penalty
+                +        time_penalty)
         return float(reward)
 
-    # ------------------------
-    # UTILS
-    # ------------------------
-    def publish_goal_marker(self):
-        marker = Marker()
-        marker.header.frame_id = "odom"
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        marker.pose.position.x = self.goal_pose_x
-        marker.pose.position.y = self.goal_pose_y
-        marker.scale.x = 0.2; marker.scale.y = 0.2; marker.scale.z = 0.2
-        marker.color.a = 1.0; marker.color.g = 1.0
-        self.marker_pub.publish(marker)
+    def compute_weighted_obstacle_reward(self):
+        """Bounded penalty in [-1, 0]. More negative when obstacles are close."""
+        if not self.sampled_ranges:
+            return 0.0
 
+        ranges = np.array(self.sampled_ranges)
+        n = len(ranges)
+
+        # Build angles corresponding to evenly-sampled beams across 360°
+        angles = np.linspace(-math.pi, math.pi, n, endpoint=False)
+
+        # FIX: Increased warning zone from 0.5m to 0.8m.
+        close_mask = ranges <= 0.8
+        if not np.any(close_mask):
+            return 0.0
+
+        close_ranges = ranges[close_mask]
+        close_angles = angles[close_mask]
+
+        safe = np.clip((close_ranges - 0.1) / (0.8 - 0.1), 1e-6, 1.0)
+        proximity = 1.0 - safe
+
+        weights = self.compute_directional_weights(close_angles)
+        weighted = np.sum(weights * proximity) / np.sum(weights + 1e-8)
+        return -float(np.clip(weighted, 0.0, 1.0))
+
+    def compute_directional_weights(self, relative_angles, max_weight=10.0):
+        """Weight beams by how directly forward they are.
+        FIX: Clip negative cosines to zero so rear-hemisphere obstacles
+        do not drive the avoidance penalty. Previously cos(180°)^6 = 1.0
+        gave rear beams the same weight as forward beams, causing the robot
+        to keep turning away from pillars it had already passed."""
+        raw = np.clip(np.cos(relative_angles), 0.0, 1.0) ** 2 + 0.05
+        max_raw = np.max(raw) if np.max(raw) != 0 else 1.0
+        scaled = raw * (max_weight / max_raw)
+        return scaled / (np.sum(scaled) + 1e-8)
+
+    # ------------------------------------------------------------------ #
+    # Quaternion → Euler
+    # ------------------------------------------------------------------ #
     def euler_from_quaternion(self, quat):
         x, y, z, w = quat.x, quat.y, quat.z, quat.w
         sinr_cosp = 2 * (w * x + y * z)
-        cosr_cosp = 1 - 2 * (x*x + y*y)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
         roll = math.atan2(sinr_cosp, cosr_cosp)
         sinp = 2 * (w * y - z * x)
-        pitch = math.copysign(math.pi/2, sinp) if abs(sinp) >= 1 else math.asin(sinp)
+        pitch = (math.copysign(math.pi / 2, sinp) if abs(sinp) >= 1
+                 else math.asin(sinp))
         siny_cosp = 2 * (w * z + x * y)
-        cosy_cosp = 1 - 2 * (y*y + z*z)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
         yaw = math.atan2(siny_cosp, cosy_cosp)
         return roll, pitch, yaw
 
+
 def main(args=None):
     rclpy.init(args=args)
-    env_node = RLEnvironment()
-    rclpy.spin(env_node)
-    env_node.destroy_node()
-    rclpy.shutdown()
+    rl_env = RLEnvironment()
+    executor = MultiThreadedExecutor()
+    executor.add_node(rl_env)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        rl_env.destroy_node()
+        rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

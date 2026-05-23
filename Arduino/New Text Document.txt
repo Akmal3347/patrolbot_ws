@@ -1522,3 +1522,983 @@ colcon build --symlink-install \
             }]
         ),
          
+
+
+
+
+
+*(updated) code*****************
+
+
+********goal_handler.py*******
+
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from turtlebot3_msgs.srv import Goal
+from gazebo_msgs.srv import SpawnEntity, SetEntityState
+import time
+import random  # <--- Essential for Mirror Mode
+
+class PatrolGoalHandler(Node):
+    def __init__(self):
+        super().__init__('patrol_goal_handler')
+        
+        # --- CONFIGURATION ---
+        self.robot_name = 'patrolbot_robot_final'
+        self.entity_name = "goal_sphere"
+        
+        self.start_x = -2.0
+        self.start_y = -0.5
+        self.goal_x = 2.0
+        self.goal_y = 0.0
+        
+        # 1. Use Reentrant Group (Allows parallel processing)
+        self.cb_group = ReentrantCallbackGroup()
+        
+        # Servers
+        self.srv = self.create_service(Goal, 'initialize_env', self.init_callback, callback_group=self.cb_group)
+        self.success_srv = self.create_service(Goal, 'task_succeed', self.success_callback, callback_group=self.cb_group)
+        self.fail_srv = self.create_service(Goal, 'task_failed', self.fail_callback, callback_group=self.cb_group)
+        
+        # Clients
+        self.spawn_client = self.create_client(SpawnEntity, '/spawn_entity', callback_group=self.cb_group)
+        self.set_state_client = self.create_client(SetEntityState, '/gazebo/set_entity_state', callback_group=self.cb_group)
+        
+        self.spawned = False
+        self.total_episodes = 0
+        self.success_count = 0
+        
+        self.get_logger().info('STRICT Goal Handler (MultiThreaded) Ready.')
+
+    def init_callback(self, request, response):
+        """This function BLOCKS until the robot is actually reset."""
+        self.total_episodes += 1
+        
+        # 2. Force Reset and WAIT for confirmation
+        self.get_logger().info(f"Ep {self.total_episodes}: Resetting Robot...")
+        success = self.reset_robot_position()
+        
+        if not success:
+            self.get_logger().error("CRITICAL: Robot Reset Failed! Is the robot name correct?")
+        
+        # 3. Set Goal
+        if not self.spawned:
+            self.spawn_goal_initially(self.goal_x, self.goal_y)
+            self.spawned = True
+        else:
+            self.move_goal_teleport(self.goal_x, self.goal_y)
+
+        response.pose_x = float(self.goal_x)
+        response.pose_y = float(self.goal_y)
+        
+        return response
+
+    def success_callback(self, request, response):
+        self.success_count += 1
+        self.print_stats("SUCCESS")
+        return response
+
+    def fail_callback(self, request, response):
+        # We don't reset here, we wait for 'init_callback' to be called by the Agent
+        self.print_stats("FAILED")
+        return response
+
+    def print_stats(self, status):
+        """Calculates and prints the success rate."""
+        if self.total_episodes > 0:
+            rate = (self.success_count / self.total_episodes) * 100.0
+        else:
+            rate = 0.0
+            
+        self.get_logger().info(f"[{status}] Total: {self.total_episodes} | Successes: {self.success_count} | Rate: {rate:.1f}%")
+
+    def reset_robot_position(self):
+        """Sends service call and WAITS for result."""
+        while not self.set_state_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for /gazebo/set_entity_state service...')
+
+        req = SetEntityState.Request()
+        req.state.name = self.robot_name
+        
+        # --- LEVEL 9: PURE SKILL (Mirror Mode Fixed) ---
+        # We still flip a coin for Top/Bottom to keep the brain flexible.
+        side = random.choice([-1, 1])
+        
+        # Set Position
+        req.state.pose.position.x = float(self.start_x) # 1.2
+        req.state.pose.position.y = side * 0.5          # Randomly -0.5 or +0.5
+        req.state.pose.position.z = 0.30
+        req.state.pose.orientation.w = 1.0
+        
+        # FIX: MIRROR THE ANGLE
+        # If side is -1 (Bottom), we use positive angle (Look Up/Left)
+        # If side is +1 (Top), we use negative angle (Look Down/Right)
+        if side == -1:
+             req.state.pose.orientation.z = 0.0
+        else:
+             req.state.pose.orientation.z = 0.0
+        
+        req.state.twist.linear.x = 0.0
+        req.state.twist.angular.z = 0.0
+        
+        # SYNCHRONOUS CALL
+        result = self.set_state_client.call(req)
+        return result.success
+
+    def move_goal_teleport(self, x, y):
+        req = SetEntityState.Request()
+        req.state.name = self.entity_name
+        req.state.pose.position.x = x
+        req.state.pose.position.y = y
+        req.state.pose.position.z = 0.05
+        self.set_state_client.call_async(req)
+
+    def spawn_goal_initially(self, x, y):
+        req = SpawnEntity.Request()
+        req.name = self.entity_name
+        req.xml = """<?xml version="1.0" ?><sdf version="1.5"><model name="goal_sphere"><static>true</static><link name="link"><visual name="visual"><geometry><sphere><radius>0.2</radius></sphere></geometry><material><ambient>0 1 0 1</ambient><diffuse>0 1 0 1</diffuse></material></visual></link></model></sdf>"""
+        req.initial_pose.position.x = x
+        req.initial_pose.position.y = y
+        self.spawn_client.call_async(req)
+
+def main():
+    rclpy.init()
+    node = PatrolGoalHandler()
+    
+    # CRITICAL: Use MultiThreadedExecutor so the node doesn't freeze 
+    # while waiting for the reset service to finish.
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+
+
+*****training_sim.py********
+
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    pkg_robot_desc = get_package_share_directory('robot_desc')
+    pkg_gazebo_ros = get_package_share_directory('gazebo_ros')
+
+    urdf_file_path = os.path.join(pkg_robot_desc, 'urdf', 'diff_robot.urdf')
+    
+    # POINT TO THE NEW FIXED WORLD
+    world_path = '/home/akmalzarif/patrolbot_tall_world.world' 
+
+    # Clean Gazebo Launch (Plugin is inside the world file now)
+    gazebo = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_gazebo_ros, 'launch', 'gazebo.launch.py')
+        ),
+        launch_arguments={'world': world_path}.items() 
+    )
+
+    spawn_entity = Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        arguments=['-entity', 'patrolbot_robot_final', '-file', urdf_file_path, '-x', '-2.0', '-y', '0.0', '-z', '0.15', '-Y', '0.0'],
+        output='screen'
+    )
+
+    goal_handler = Node(
+        package='robot_desc',
+        executable='goal_handler.py',
+        name='goal_handler',
+        output='screen'
+    )
+
+    with open(urdf_file_path, 'r') as infp:
+        robot_desc = infp.read()
+
+    robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[{'robot_description': robot_desc}]
+    )
+
+    return LaunchDescription([gazebo, spawn_entity, goal_handler, robot_state_publisher])
+
+
+*******patrolbot_env.py********
+
+
+#!/usr/bin/env python3
+import os
+import math
+import time
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from geometry_msgs.msg import Twist, TwistStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
+from std_srvs.srv import Empty
+from visualization_msgs.msg import Marker
+from turtlebot3_msgs.srv import Goal, Dqn
+
+ROS_DISTRO = os.environ.get('ROS_DISTRO')
+
+
+class RLEnvironment(Node):
+    def __init__(self):
+        super().__init__('rl_environment')
+
+        # Robot and goal states
+        self.goal_pose_x = 2.0
+        self.goal_pose_y = 2.0
+        self.robot_pose_x = 0.0
+        self.robot_pose_y = 0.0
+        self.robot_pose_theta = 0.0
+
+        # RL parameters
+        self.done = False
+        self.succeed = False
+        self.fail = False
+        self.local_step = 0
+        self.max_step = 600
+
+        # Discrete angular actions (reduced magnitudes)
+        # safer turns: ±0.6, ±0.3 rad/s
+        self.angular_vel = [0.6, 0.3, 0.0, -0.3, -0.6]
+
+        # Laser scan / beams
+        self.front_ranges = []
+        self.front_angles = []
+        self.max_beams = 24
+        self.min_obstacle_distance = 3.5
+
+        # Last command (for reward shaping)
+        self.last_cmd_linear_x = 0.0
+        self.last_cmd_angular_z = 0.0
+
+        # Goal distance history
+        self.init_goal_distance = 0.0
+        self.prev_goal_distance = 0.0
+
+        # Collision / reward hyperparams (tunable)
+        self.collision_penalty = -50.0    # softened from -50
+        self.success_reward = 100.0
+        self.min_safe_dist = 0.5          # used to scale speed
+        self.obstacle_reward_scale = 0.2  # factor to tune obstacle penalty magnitude
+
+        # ROS QoS
+        qos_group = 10
+        self.use_twist = True if ROS_DISTRO == 'humble' else False
+        if self.use_twist:
+            self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', qos_group)
+        else:
+            self.cmd_vel_pub = self.create_publisher(TwistStamped, 'cmd_vel', qos_group)
+
+        # Publishers & Subscribers
+        self.marker_pub = self.create_publisher(Marker, 'goal_marker', 10)
+        self.odom_sub = self.create_subscription(Odometry, 'odom', self.odom_sub_callback, qos_group)
+        self.scan_sub = self.create_subscription(LaserScan, 'scan', self.scan_sub_callback, qos_group)
+
+        # Service clients - FIXED TO REENTRANT
+        self.clients_callback_group = ReentrantCallbackGroup()
+        self.initialize_environment_client = self.create_client(
+            Goal, 'initialize_env', callback_group=self.clients_callback_group
+        )
+        self.task_succeed_client = self.create_client(
+            Goal, 'task_succeed', callback_group=self.clients_callback_group
+        )
+        self.task_failed_client = self.create_client(
+            Goal, 'task_failed', callback_group=self.clients_callback_group
+        )
+
+        # Services
+        self.make_environment_srv = self.create_service(Empty, 'make_environment', self.handle_make_environment, callback_group=self.clients_callback_group)
+        self.reset_environment_srv = self.create_service(Dqn, 'reset_environment', self.handle_reset_environment, callback_group=self.clients_callback_group)
+        self.rl_agent_interface_srv = self.create_service(Dqn, 'rl_agent_interface', self.handle_rl_agent_interface, callback_group=self.clients_callback_group)
+
+        # Safety defaults
+        self.goal_distance = math.hypot(self.goal_pose_x - self.robot_pose_x,
+                                        self.goal_pose_y - self.robot_pose_y)
+        self.goal_angle = 0.0
+
+    # ------------------------
+    # Twist helper
+    # ------------------------
+    def publish_twist(self, linear_x=0.0, angular_z=0.0):
+        """Publish velocity command continuously."""
+        self.last_cmd_linear_x = float(linear_x)
+        self.last_cmd_angular_z = float(angular_z)
+
+        # clamp for safety
+        max_linear = 0.4
+        linear_x = float(np.clip(linear_x, -max_linear, max_linear))
+        angular_z = float(np.clip(angular_z, -1.0, 1.0))
+
+        if self.use_twist:
+            msg = Twist()
+            msg.linear.x = linear_x
+            msg.angular.z = angular_z
+            self.cmd_vel_pub.publish(msg)
+        else:
+            ts = TwistStamped()
+            ts.header.stamp = self.get_clock().now().to_msg()
+            ts.twist.linear.x = linear_x
+            ts.twist.angular.z = angular_z
+            self.cmd_vel_pub.publish(ts)
+
+    def stop_robot(self):
+        """Stop robot immediately."""
+        self.publish_twist(0.0, 0.0)
+        self.last_cmd_linear_x = 0.0
+        self.last_cmd_angular_z = 0.0
+
+    # ------------------------
+    # Goal marker
+    # ------------------------
+    def publish_goal_marker(self):
+        marker = Marker()
+        marker.header.frame_id = "odom"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "goal"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = self.goal_pose_x
+        marker.pose.position.y = self.goal_pose_y
+        marker.pose.position.z = 0.05
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.2
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+        self.marker_pub.publish(marker)
+
+    # ------------------------
+    # Service handlers
+    # ------------------------
+    def handle_make_environment(self, request, response):
+        self.get_logger().info("make_environment service called")
+        self.make_environment()
+        return response
+
+    def handle_reset_environment(self, request, response):
+        self.get_logger().info("reset_environment service called")
+        self.make_environment()
+        time.sleep(0.5)
+        state = self.calculate_state()
+        self.init_goal_distance = state[0] if len(state) > 0 else 0.0
+        self.prev_goal_distance = self.init_goal_distance
+        response.state = state
+        return response
+
+    def handle_rl_agent_interface(self, request, response):
+        """Main interface for agent actions."""
+        # Linear forward velocity base and cap
+        base_linear = 0.2
+        max_linear = 0.4
+        angle_scale = max(0.0, 1 - abs(getattr(self, 'goal_angle', 0.0)) / math.pi)
+        linear_x = base_linear + (max_linear - base_linear) * angle_scale
+        linear_x = float(np.clip(linear_x, 0.0, max_linear))
+
+        # Slow down near obstacles: compute obstacle_scale in [0,1]
+        front_min = min(self.front_ranges) if self.front_ranges else 3.5
+        # If front_min >= min_safe_dist -> obstacle_scale = 1.0 (no slow down)
+        if front_min >= self.min_safe_dist:
+            obstacle_scale = 1.0
+        else:
+            # linearly scale 0 when extremely close -> 1 when at min_safe_dist
+            obstacle_scale = float(np.clip((front_min - 0.1) / (self.min_safe_dist - 0.1), 0.4, 1.0))
+
+        linear_x *= obstacle_scale
+        linear_x = float(np.clip(linear_x, 0.0, max_linear))  # final clamp
+
+        # Angular velocity from discrete action (bounded)
+        angular_z = float(self.angular_vel[request.action])
+
+        # Publish velocities
+        self.publish_twist(linear_x, angular_z)
+
+        # DEBUG: Print distance to nearest obstacle
+        self.get_logger().info(f"Step: {self.local_step} | Nearest Obstacle: {front_min:.2f}m")
+
+        # ==========================================
+        # FIXED: WAIT FOR GAZEBO PHYSICS TO CATCH UP
+        # ==========================================
+        time.sleep(0.1)
+
+        # Compute state, reward, done
+        state = self.calculate_state()
+        reward = self.calculate_reward()
+        done = self.done
+
+        response.state = state
+        response.reward = reward
+        response.done = done
+
+        if done:
+            # robot already stopped in calculate_state
+            # reset ephemeral flags after giving the terminal transition to agent
+            self.done = False
+            self.succeed = False
+            self.fail = False
+
+        return response
+
+    # ------------------------
+    # Subscribers
+    # ------------------------
+    def odom_sub_callback(self, msg):
+        self.robot_pose_x = msg.pose.pose.position.x
+        self.robot_pose_y = msg.pose.pose.position.y
+        _, _, self.robot_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
+
+        goal_distance = math.hypot(self.goal_pose_x - self.robot_pose_x,
+                                   self.goal_pose_y - self.robot_pose_y)
+        path_theta = math.atan2(self.goal_pose_y - self.robot_pose_y,
+                                self.goal_pose_x - self.robot_pose_x)
+        goal_angle = path_theta - self.robot_pose_theta
+        # normalize to [-pi, pi]
+        goal_angle = (goal_angle + math.pi) % (2 * math.pi) - math.pi
+
+        self.goal_distance = goal_distance
+        self.goal_angle = goal_angle
+
+    def scan_sub_callback(self, scan):
+        ranges = np.array(scan.ranges, dtype=np.float32)
+        # replace inf/nan with a large finite distance
+        ranges = np.where(np.isinf(ranges), 3.5, ranges)
+        ranges = np.where(np.isnan(ranges), 3.5, ranges)
+
+        self.front_ranges = []
+        self.front_angles = []
+        for i, distance in enumerate(ranges):
+            angle = scan.angle_min + i * scan.angle_increment
+            ang = ((angle + math.pi) % (2*math.pi)) - math.pi
+            # keep beams within +-45 degrees
+            if -math.pi/4 <= ang <= math.pi/4:
+                self.front_ranges.append(float(distance))
+                self.front_angles.append(float(ang))
+
+        self.min_obstacle_distance = float(np.min(ranges)) if ranges.size > 0 else 3.5
+
+    # ------------------------
+    # Environment functions - FIXED FOR MULTITHREADING
+    # ------------------------
+    def make_environment(self):
+        while not self.initialize_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for initialize_env service...')
+            
+        # Use simple blocking call instead of spin_until_future_complete
+        req = Goal.Request()
+        result = self.initialize_environment_client.call(req)
+        
+        self.goal_pose_x = result.pose_x
+        self.goal_pose_y = result.pose_y
+        self.get_logger().info(f"Goal initialized at [{self.goal_pose_x}, {self.goal_pose_y}]")
+        self.publish_goal_marker()
+
+    def call_task_succeed(self):
+        while not self.task_succeed_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for task_succeed service...')
+        
+        req = Goal.Request()
+        self.task_succeed_client.call(req)
+
+    def call_task_failed(self):
+        while not self.task_failed_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Waiting for task_failed service...')
+            
+        req = Goal.Request()
+        self.task_failed_client.call(req)
+
+    # ------------------------
+    # RL calculations
+    # ------------------------
+    def calculate_state(self):
+        self.goal_distance = getattr(self, 'goal_distance', math.hypot(self.goal_pose_x - self.robot_pose_x,
+                                                                       self.goal_pose_y - self.robot_pose_y))
+        self.local_step += 1
+
+        # Episode termination: collision (Increased to 0.25), success, or timeout
+        if getattr(self, 'min_obstacle_distance', 3.5) < 0.25:
+            self.get_logger().info('Collision happened')
+            self.fail = True
+            self.done = True
+            self.stop_robot()
+            self.local_step = 0
+            self.call_task_failed()
+        elif self.goal_distance < 0.20:
+            self.get_logger().info('Goal Reached')
+            self.succeed = True
+            self.done = True
+            self.stop_robot()
+            self.local_step = 0
+            self.call_task_succeed()
+        elif self.local_step >= self.max_step:
+            self.get_logger().info('Time out!')
+            self.fail = True
+            self.done = True
+            self.stop_robot()
+            self.local_step = 0
+            self.call_task_failed()
+
+        # Fixed-length front beams (pad with large distance)
+        front = list(self.front_ranges) if self.front_ranges else []
+        if len(front) >= self.max_beams:
+            front = front[:self.max_beams]
+        else:
+            front = front + [3.5] * (self.max_beams - len(front))
+
+        state = [self.goal_distance / 5.0, getattr(self, 'goal_angle', 0.0) / math.pi] + [float(r) for r in front]
+        return state
+
+    def calculate_reward(self):
+        # Terminal rewards first
+        if self.fail:
+            return float(self.collision_penalty)
+        if self.succeed:
+            return float(self.success_reward)
+
+        # Dense shaping rewards
+        goal_distance = getattr(self, 'goal_distance', math.hypot(self.goal_pose_x - self.robot_pose_x,
+                                                                  self.goal_pose_y - self.robot_pose_y))
+        prev = getattr(self, 'prev_goal_distance', goal_distance)
+        progress = max(0.0, prev - goal_distance)
+        self.prev_goal_distance = goal_distance
+        progress_reward = 10.0 * progress   # reduced multiplier (was 10.0)
+
+        yaw_reward = 2.0 * (1.0 - (2.0 * abs(self.goal_angle)/math.pi))
+
+        vel = getattr(self, 'last_cmd_linear_x', 0.0)
+        velocity_reward = 0.5 * vel / 0.5  # normalized with max_linear
+
+        standing_penalty = -0.02 if vel < 0.03 and abs(getattr(self, 'last_cmd_angular_z', 0.0)) < 0.05 else 0.0
+        spin_penalty = -0.001 * abs(getattr(self, 'last_cmd_angular_z', 0.0))
+
+        obstacle_reward = self.compute_weighted_obstacle_reward()
+        # scale obstacle_reward to small magnitude so it doesn't dominate
+        obstacle_reward = float(np.clip(obstacle_reward * self.obstacle_reward_scale, -1.0, 0.0))
+
+        reward = 0.1 * yaw_reward + 1.0 * progress_reward + 0.2 * velocity_reward + 0.4 * obstacle_reward + standing_penalty + spin_penalty
+        return float(reward)
+
+    def compute_weighted_obstacle_reward(self):
+        """Return a bounded negative value in [-1, 0]. More negative when obstacles are closer in front."""
+        if not self.front_ranges or not self.front_angles:
+            return 0.0
+        front_ranges = np.array(self.front_ranges)
+        front_angles = np.array(self.front_angles)
+        # consider beams within a 'close' threshold (0.5 m)
+        close_mask = front_ranges <= 0.5
+        if not np.any(close_mask):
+            return 0.0
+
+        close_ranges = front_ranges[close_mask]
+        close_angles = front_angles[close_mask]
+
+        # compute simple proximity penalty per beam: 1.0 when distance==0.1, 0.0 when distance>=0.5
+        safe = np.clip((close_ranges - 0.1) / (0.5 - 0.1), 1e-6, 1.0)
+        proximity = 1.0 - safe  # 1.0 when very close, 0 when at threshold
+
+        # directional weighting (front-centered)
+        weights = self.compute_directional_weights(close_angles, max_weight=10.0)
+        weighted = np.sum(weights * proximity) / np.sum(weights + 1e-8)
+
+        # map weighted in [0,1] to penalty in [-1,0]
+        return -float(np.clip(weighted, 0.0, 1.0))
+
+    def compute_directional_weights(self, relative_angles, max_weight=10.0):
+        power = 6
+        raw_weights = (np.cos(relative_angles))**power + 0.1
+        max_raw = np.max(raw_weights) if np.max(raw_weights) != 0 else 1.0
+        scaled_weights = raw_weights * (max_weight / max_raw)
+        normalized_weights = scaled_weights / (np.sum(scaled_weights) + 1e-8)
+        return normalized_weights
+
+    # ------------------------
+    # Quaternion -> Euler
+    # ------------------------
+    def euler_from_quaternion(self, quat):
+        x, y, z, w = quat.x, quat.y, quat.z, quat.w
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x*x + y*y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        sinp = 2 * (w * y - z * x)
+        pitch = math.copysign(math.pi/2, sinp) if abs(sinp) >= 1 else math.asin(sinp)
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y*y + z*z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return roll, pitch, yaw
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    rl_env = RLEnvironment()
+    
+    # FIXED: Use MultiThreadedExecutor to prevent service deadlocks
+    executor = MultiThreadedExecutor()
+    executor.add_node(rl_env)
+    
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        rl_env.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+    *******ppo_agent.py********
+
+
+    #!/usr/bin/env python3
+import datetime
+import os
+import sys
+import time
+import numpy as np
+import rclpy
+
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
+from std_srvs.srv import Empty
+from turtlebot3_msgs.srv import Dqn
+
+import tensorflow as tf
+from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+
+# optional: disable GPU if needed
+try:
+    tf.config.set_visible_devices([], 'GPU')
+except Exception:
+    pass
+
+LOGGING = True
+current_time = datetime.datetime.now().strftime('[%m%d-%H:%M]')
+
+
+class PPOAgent(Node):
+    def __init__(self, stage_num, max_training_episodes, load_episode):
+        super().__init__('ppo_agent')
+
+        # Basic RL settings
+        self.stage = int(stage_num)
+        self.max_training_episodes = int(max_training_episodes)
+        self.load_episode = int(load_episode)
+        self.state_size = 26
+        self.action_size = 5
+
+        # PPO Hyperparameters (tunable)
+        self.gamma = 0.99
+        self.lam = 0.95
+        self.clip_ratio = 0.2
+        self.learning_rate = 3e-4
+        self.train_mode = True
+        self.minibatch_size = 64          # recommended smaller minibatch
+        self.update_epochs = 10            # number of passes over data per update
+        self.entropy_coef = 0.01
+        self.value_coef = 0.5
+        self.max_grad_norm = 0.5
+
+        # Replay buffer (per-episode)
+        self.buffer_states = []
+        self.buffer_actions = []
+        self.buffer_logp = []
+        self.buffer_rewards = []
+        self.buffer_values = []
+        self.buffer_dones = []
+
+        # Model saving path
+        self.model_dir_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            'saved_model_ppo'
+        )
+        os.makedirs(self.model_dir_path, exist_ok=True)
+
+        # --- TENSORBOARD LOGGING SETUP ---
+        self.log_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            'ppo_logs', 'run_' + current_time
+        )
+        self.writer = tf.summary.create_file_writer(self.log_dir)
+        self.get_logger().info(f"TensorBoard logs will be saved to: {self.log_dir}")
+
+        # Actor–Critic models
+        self.actor = self.build_actor()
+        self.critic = self.build_critic()
+
+        # --- NEW: Load Weights Logic ---
+        if self.load_episode > 0:
+            actor_path = os.path.join(self.model_dir_path, f"actor_ep{self.load_episode}.h5")
+            critic_path = os.path.join(self.model_dir_path, f"critic_ep{self.load_episode}.h5")
+            
+            if os.path.exists(actor_path) and os.path.exists(critic_path):
+                self.actor.load_weights(actor_path)
+                self.critic.load_weights(critic_path)
+                self.get_logger().info(f"SUCCESS: Loaded weights from Episode {self.load_episode}")
+            else:
+                self.get_logger().error(f"FAILED: Could not find files for Episode {self.load_episode}. Starting from scratch.")
+                self.load_episode = 0
+
+        # ROS2 communication
+        self.rl_agent_interface_client = self.create_client(Dqn, 'rl_agent_interface')
+        self.make_environment_client = self.create_client(Empty, 'make_environment')
+        self.reset_environment_client = self.create_client(Dqn, 'reset_environment')
+
+        self.action_pub = self.create_publisher(Float32MultiArray, '/get_action', 10)
+        self.result_pub = self.create_publisher(Float32MultiArray, '/result', 10)
+
+    # -------------------------- Model creation -------------------------- #
+    def build_actor(self):
+        inputs = Input(shape=(self.state_size,), dtype=tf.float32)
+        x = Dense(256, activation='relu')(inputs)
+        x = Dense(256, activation='relu')(x)
+        outputs = Dense(self.action_size, activation='softmax', dtype=tf.float32)(x)
+        model = Model(inputs, outputs)
+        model.compile(optimizer=Adam(learning_rate=self.learning_rate))
+        return model
+
+    def build_critic(self):
+        inputs = Input(shape=(self.state_size,), dtype=tf.float32)
+        x = Dense(256, activation='relu')(inputs)
+        x = Dense(256, activation='relu')(x)
+        outputs = Dense(1, activation='linear', dtype=tf.float32)(x)
+        model = Model(inputs, outputs)
+        model.compile(optimizer=Adam(learning_rate=self.learning_rate))
+        return model
+
+    # -------------------------- PPO Core -------------------------- #
+    def get_action(self, state):
+        # state: shape (1, state_size)
+        probs = self.actor.predict(state, verbose=0)[0].astype(np.float64)
+        probs = np.clip(probs, 1e-10, 1.0)
+        probs = probs / probs.sum()
+        action = np.random.choice(self.action_size, p=probs)
+        logp = float(np.log(probs[action]))
+        value = float(self.critic.predict(state, verbose=0)[0][0])
+        return action, logp, value
+
+    def compute_gae(self, rewards, values, dones):
+        # rewards, values, dones are 1D numpy arrays of length T
+        T = len(rewards)
+        advantages = np.zeros(T, dtype=np.float32)
+        last_gae = 0.0
+        for t in reversed(range(T)):
+            next_value = values[t + 1] if t + 1 < T else 0.0
+            mask = 1.0 - float(dones[t])
+            delta = float(rewards[t]) + self.gamma * next_value * mask - float(values[t])
+            last_gae = delta + self.gamma * self.lam * mask * last_gae
+            advantages[t] = last_gae
+        returns = advantages + values
+        return advantages.astype(np.float32), returns.astype(np.float32)
+
+    def ppo_update(self, states, actions, logp_old, returns, advantages, episode_num):
+        # Ensure correct dtypes
+        states = tf.convert_to_tensor(states, dtype=tf.float32)
+        actions = tf.convert_to_tensor(actions, dtype=tf.int32)
+        logp_old = tf.convert_to_tensor(logp_old, dtype=tf.float32)
+        returns = tf.convert_to_tensor(returns, dtype=tf.float32)
+        advantages = tf.convert_to_tensor(advantages, dtype=tf.float32)
+        advantages = (advantages - tf.reduce_mean(advantages)) / (tf.math.reduce_std(advantages) + 1e-8)
+
+        dataset_size = states.shape[0]
+        indices = np.arange(dataset_size)
+
+        total_actor_loss = 0.0
+        total_critic_loss = 0.0
+
+        for _ in range(self.update_epochs):
+            np.random.shuffle(indices)
+            for start in range(0, dataset_size, self.minibatch_size):
+                end = start + self.minibatch_size
+                mb_idx = indices[start:end]
+
+                mb_states = tf.gather(states, mb_idx)
+                mb_actions = tf.gather(actions, mb_idx)
+                mb_logp_old = tf.gather(logp_old, mb_idx)
+                mb_returns = tf.gather(returns, mb_idx)
+                mb_adv = tf.gather(advantages, mb_idx)
+
+                with tf.GradientTape() as tape_a, tf.GradientTape() as tape_c:
+                    probs = self.actor(mb_states, training=True)  # shape (B, action_size)
+                    one_hot_actions = tf.one_hot(mb_actions, self.action_size)
+                    selected_probs = tf.reduce_sum(probs * one_hot_actions, axis=1)
+                    logp = tf.math.log(selected_probs + 1e-10)
+
+                    ratio = tf.exp(logp - mb_logp_old)
+                    unclipped = ratio * mb_adv
+                    clipped = tf.clip_by_value(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * mb_adv
+                    actor_loss = -tf.reduce_mean(tf.minimum(unclipped, clipped))
+
+                    # entropy bonus (encourage exploration)
+                    entropy = -tf.reduce_mean(tf.reduce_sum(probs * tf.math.log(probs + 1e-10), axis=1))
+                    actor_loss = actor_loss - self.entropy_coef * entropy
+
+                    values_pred = tf.squeeze(self.critic(mb_states, training=True), axis=1)
+                    critic_loss = tf.reduce_mean(tf.square(mb_returns - values_pred)) * self.value_coef
+
+                grads_a = tape_a.gradient(actor_loss, self.actor.trainable_variables)
+                grads_c = tape_c.gradient(critic_loss, self.critic.trainable_variables)
+
+                # gradient clipping
+                grads_a, _ = tf.clip_by_global_norm(grads_a, self.max_grad_norm)
+                grads_c, _ = tf.clip_by_global_norm(grads_c, self.max_grad_norm)
+
+                self.actor.optimizer.apply_gradients(zip(grads_a, self.actor.trainable_variables))
+                self.critic.optimizer.apply_gradients(zip(grads_c, self.critic.trainable_variables))
+                
+                total_actor_loss += actor_loss.numpy()
+                total_critic_loss += critic_loss.numpy()
+
+        # Log Losses to TensorBoard
+        with self.writer.as_default():
+            tf.summary.scalar('Loss/Actor_Loss', total_actor_loss / self.update_epochs, step=episode_num)
+            tf.summary.scalar('Loss/Critic_Loss', total_critic_loss / self.update_epochs, step=episode_num)
+
+    # -------------------------- ROS2 Env -------------------------- #
+    def env_make(self):
+        while not self.make_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn("Waiting for make_environment service...")
+        self.make_environment_client.call_async(Empty.Request())
+
+    def reset_environment(self):
+        while not self.reset_environment_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn("Waiting for reset_environment...")
+        future = self.reset_environment_client.call_async(Dqn.Request())
+        rclpy.spin_until_future_complete(self, future)
+        state = np.array(future.result().state, dtype=np.float32)
+        return np.reshape(state, (1, self.state_size))
+
+    def step(self, action):
+        req = Dqn.Request()
+        req.action = int(action)
+        while not self.rl_agent_interface_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Waiting for rl_agent_interface...")
+        future = self.rl_agent_interface_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        result = future.result()
+        next_state = np.reshape(np.array(result.state, dtype=np.float32), (1, self.state_size))
+        return next_state, float(result.reward), bool(result.done)
+
+    # -------------------------- Main PPO Loop -------------------------- #
+    def process(self):
+        self.get_logger().info("Waiting 5 seconds for environment to initialize...")
+        time.sleep(5)
+        self.env_make()
+        time.sleep(1.0)
+
+        # --- NEW: Start loop from load_episode ---
+        start_ep = self.load_episode + 1
+        end_ep = self.load_episode + self.max_training_episodes + 1
+
+        for episode in range(start_ep, end_ep):
+            state = self.reset_environment()
+            score = 0.0
+            # clear buffers
+            self.buffer_states.clear()
+            self.buffer_actions.clear()
+            self.buffer_logp.clear()
+            self.buffer_rewards.clear()
+            self.buffer_values.clear()
+            self.buffer_dones.clear()
+
+            while True:
+                action, logp, value = self.get_action(state)
+                next_state, reward, done = self.step(action)
+                score += reward
+
+                self.buffer_states.append(state[0].astype(np.float32))
+                self.buffer_actions.append(int(action))
+                self.buffer_logp.append(float(logp))
+                self.buffer_rewards.append(float(reward))
+                self.buffer_values.append(float(value))
+                self.buffer_dones.append(bool(done))
+
+                state = next_state
+
+                msg = Float32MultiArray()
+                msg.data = [float(action), float(score), float(reward)]
+                self.action_pub.publish(msg)
+
+                if done:
+                    # compute GAE and returns
+                    values_np = np.array(self.buffer_values, dtype=np.float32)
+                    advantages, returns = self.compute_gae(
+                        np.array(self.buffer_rewards, dtype=np.float32),
+                        values_np,
+                        np.array(self.buffer_dones, dtype=np.float32)
+                    )
+
+                    # update networks
+                    self.ppo_update(
+                        np.array(self.buffer_states, dtype=np.float32),
+                        np.array(self.buffer_actions, dtype=np.int32),
+                        np.array(self.buffer_logp, dtype=np.float32),
+                        returns,
+                        advantages,
+                        episode
+                    )
+
+                    # Log Episode Metrics to TensorBoard
+                    with self.writer.as_default():
+                        tf.summary.scalar('Performance/Score', score, step=episode)
+                        tf.summary.scalar('Performance/Return_Mean', np.mean(returns), step=episode)
+                        self.writer.flush()
+
+                    msg = Float32MultiArray()
+                    msg.data = [float(score), float(np.mean(returns))]
+                    self.result_pub.publish(msg)
+                    print(f"Episode {episode}  Score: {score:.2f}")
+
+                    if episode % 50 == 0:
+                        self.actor.save(os.path.join(self.model_dir_path, f"actor_ep{episode}.h5"))
+                        self.critic.save(os.path.join(self.model_dir_path, f"critic_ep{episode}.h5"))
+                    break
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv
+    stage_num = argv[1] if len(argv) > 1 else '1'
+    max_training_episodes = argv[2] if len(argv) > 2 else '1000'
+    load_episode = argv[3] if len(argv) > 3 else '0' # --- NEW: 3rd Argument ---
+
+    rclpy.init(args=argv)
+    ppo_agent = PPOAgent(stage_num, max_training_episodes, load_episode)
+    try:
+        # Run training loop directly. Do not call rclpy.spin() after process()
+        ppo_agent.process()
+    finally:
+        ppo_agent.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
